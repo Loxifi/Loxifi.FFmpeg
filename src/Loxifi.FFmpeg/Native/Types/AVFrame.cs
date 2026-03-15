@@ -33,14 +33,6 @@ public unsafe struct AVFrame
     public long PktDts;
     // Remaining fields omitted — not accessed directly past this point.
 
-    public nint* DataPtrs
-    {
-        get
-        {
-            fixed (nint* p = &Data0)
-                return p;
-        }
-    }
 }
 
 [StructLayout(LayoutKind.Sequential)]

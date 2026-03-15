@@ -244,6 +244,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
             // which are beyond our mapped struct fields. Stream copy is sufficient
             // for the resize use case (video bitrate dominates file size).
             // Fall back to stream copy for audio.
+            AVCodec.avcodec_free_context(&decCtx);
+            _decoderCtxs[streamIndex] = null;
             AVCodec.avcodec_free_context(&encCtx);
             _encoderCtxs[streamIndex] = null;
             FFmpegException.ThrowIfError(
@@ -386,21 +388,48 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
             AVFrame* frameToEncode = frame;
 
-            // Apply video scaling if needed
+            // Apply video scaling/pixel format conversion if needed
             if (_swsCtxs[inputIndex] != nint.Zero)
             {
+                AVUtil.av_frame_unref(scaledFrame);
                 scaledFrame->Width = encCtx->Width;
                 scaledFrame->Height = encCtx->Height;
                 scaledFrame->Format = (int)encCtx->PixFmt;
-                AVUtil.av_frame_get_buffer(scaledFrame, 0);
+                FFmpegException.ThrowIfError(
+                    AVUtil.av_frame_get_buffer(scaledFrame, 0),
+                    "Failed to allocate scaled frame buffer");
 
-                SWScale.sws_scale(
-                    _swsCtxs[inputIndex],
-                    (byte**)&frame->DataPtrs[0],
-                    frame->Linesize,
-                    0, decCtx->Height,
-                    (byte**)&scaledFrame->DataPtrs[0],
-                    scaledFrame->Linesize);
+                byte*[] srcData = [
+                    (byte*)frame->Data0, (byte*)frame->Data1,
+                    (byte*)frame->Data2, (byte*)frame->Data3,
+                    (byte*)frame->Data4, (byte*)frame->Data5,
+                    (byte*)frame->Data6, (byte*)frame->Data7
+                ];
+                byte*[] dstData = [
+                    (byte*)scaledFrame->Data0, (byte*)scaledFrame->Data1,
+                    (byte*)scaledFrame->Data2, (byte*)scaledFrame->Data3,
+                    (byte*)scaledFrame->Data4, (byte*)scaledFrame->Data5,
+                    (byte*)scaledFrame->Data6, (byte*)scaledFrame->Data7
+                ];
+                int[] srcLinesize = new int[8];
+                int[] dstLinesize = new int[8];
+                for (int j = 0; j < 8; j++)
+                {
+                    srcLinesize[j] = frame->Linesize[j];
+                    dstLinesize[j] = scaledFrame->Linesize[j];
+                }
+
+                fixed (byte** srcPtr = srcData)
+                fixed (byte** dstPtr = dstData)
+                fixed (int* srcStridePtr = srcLinesize)
+                fixed (int* dstStridePtr = dstLinesize)
+                {
+                    SWScale.sws_scale(
+                        _swsCtxs[inputIndex],
+                        srcPtr, srcStridePtr,
+                        0, frame->Height,
+                        dstPtr, dstStridePtr);
+                }
 
                 scaledFrame->Pts = frame->Pts;
                 frameToEncode = scaledFrame;

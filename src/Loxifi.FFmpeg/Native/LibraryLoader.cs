@@ -42,13 +42,7 @@ public static class LibraryLoader
         if (_initialized) return;
         _initialized = true;
 
-        try
-        {
-            NativeLibrary.SetDllImportResolver(typeof(LibraryLoader).Assembly, ResolveLibrary);
-        }
-        catch (Exception ex)
-        {
-        }
+        NativeLibrary.SetDllImportResolver(typeof(LibraryLoader).Assembly, ResolveLibrary);
     }
 
     private static nint ResolveLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)

@@ -215,7 +215,7 @@ public class MediaOperationsTests
         }
     }
 
-    [Fact(Skip = "Video re-encoding crashes due to AVFrame data pointer access in sws_scale — needs AVFrame struct layout verification")]
+    [Fact]
     public void ResizeToFileSize_ProducesSmallFile()
     {
         string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_resize_{Guid.NewGuid()}.mp4");

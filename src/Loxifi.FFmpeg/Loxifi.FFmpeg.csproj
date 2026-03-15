@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Loxifi.FFmpeg</PackageId>
+    <Description>Cross-platform .NET 8.0 FFmpeg P/Invoke library for media transcoding</Description>
+  </PropertyGroup>
+
+</Project>

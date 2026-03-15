@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <PackageId>Loxifi.FFmpeg.Runtime.win-x64</PackageId>
+    <Description>FFmpeg native binaries for Windows x64</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="runtimes\win-x64\native\**" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="PreserveNewest" Link="runtimes\win-x64\native\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

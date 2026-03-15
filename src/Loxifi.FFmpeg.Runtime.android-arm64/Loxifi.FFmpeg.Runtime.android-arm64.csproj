@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <PackageId>Loxifi.FFmpeg.Runtime.android-arm64</PackageId>
+    <Description>FFmpeg native binaries for Android arm64</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="runtimes\android-arm64\native\**" PackagePath="runtimes\android-arm64\native" CopyToOutputDirectory="PreserveNewest" Link="runtimes\android-arm64\native\%(Filename)%(Extension)" />
+    <Content Include="buildTransitive\**" PackagePath="buildTransitive" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Automatically add FFmpeg GPL native libraries for Android arm64 builds -->
+  <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android' or '$(TargetFramework)' != '' and $(TargetFramework.Contains('android'))">
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavutil.so" Abi="arm64-v8a" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libswresample.so" Abi="arm64-v8a" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavcodec.so" Abi="arm64-v8a" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libswscale.so" Abi="arm64-v8a" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavformat.so" Abi="arm64-v8a" />
+  </ItemGroup>
+</Project>

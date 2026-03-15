@@ -2,18 +2,18 @@
 set -e
 
 # Build FFmpeg shared libraries for all platforms with identical codec support.
-# Usage: ./scripts/build-ffmpeg.sh [lgpl|gpl] (default: both)
-#
-# All platforms (Linux x64, Windows x64, Android arm64) are cross-compiled
-# from source with the same configuration to ensure parity.
+# Usage: ./scripts/build-ffmpeg.sh [lgpl|gpl] [linux-x64|win-x64|android-arm64|all]
+# Default: both licenses, all platforms
 #
 # Prerequisites:
 #   - Android NDK r27c: sdkmanager "ndk;27.2.12479018"
-#   - Host tools: gcc g++ make cmake nasm pkg-config autoconf automake libtool git
+#   - mingw-w64 for Windows cross-compile: apt install gcc-mingw-w64-x86-64
+#   - Host tools: gcc g++ make cmake nasm pkg-config autoconf automake libtool git meson ninja-build
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_MODE="${1:-both}"
+LICENSE_MODE="${1:-both}"
+PLATFORM_MODE="${2:-all}"
 
 FFMPEG_VERSION="7.1"
 FFMPEG_SOURCE_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
@@ -25,125 +25,150 @@ NDK_SYSROOT="$NDK_TOOLCHAIN/sysroot"
 NDK_API=21
 
 WORK_DIR="/tmp/ffmpeg-build-$$"
-NDK_BIN="$WORK_DIR/ndk-bin"
-ANDROID_PREFIX="$WORK_DIR/android-deps"
 NPROC=$(nproc)
 
-# Cross-platform codec libraries to build (identical on all platforms)
-# GPL-only libs: x264, x265, xvid
-# LGPL/BSD libs: all others
-COMMON_LIBS="libaom libdav1d libsvtav1 libvpx libmp3lame libopus libvorbis libtheora libwebp libopencore-amrnb libopencore-amrwb libopenh264 libopenjpeg libzimg"
-GPL_LIBS="libx264 libx265 libxvid"
+# Current target being built — set by setup_target
+TARGET=""        # linux-x64, win-x64, android-arm64
+PREFIX=""         # install prefix for deps
+HOST_TRIPLE=""    # autotools --host
+CMAKE_TOOLCHAIN="" # cmake toolchain args
+FFMPEG_TARGET_FLAGS="" # ffmpeg configure target args
 
-cleanup() {
-    rm -rf "$WORK_DIR"
-}
+cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
+mkdir -p "$WORK_DIR"
 
-mkdir -p "$WORK_DIR" "$ANDROID_PREFIX/lib/pkgconfig" "$ANDROID_PREFIX/include"
+# ── Target setup ──
 
-# ── Toolchain setup ──
+setup_target() {
+    TARGET="$1"
+    PREFIX="$WORK_DIR/${TARGET}-deps"
+    mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include"
 
-setup_ndk() {
-    mkdir -p "$NDK_BIN"
-    ln -sf "$NDK_TOOLCHAIN/bin/aarch64-linux-android${NDK_API}-clang"   "$NDK_BIN/aarch64-clang"
-    ln -sf "$NDK_TOOLCHAIN/bin/aarch64-linux-android${NDK_API}-clang++" "$NDK_BIN/aarch64-clang++"
-    ln -sf "$NDK_TOOLCHAIN/bin/clang"       "$NDK_BIN/clang"
-    ln -sf "$NDK_TOOLCHAIN/bin/clang++"     "$NDK_BIN/clang++"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-nm"     "$NDK_BIN/"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-ar"     "$NDK_BIN/"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-ranlib" "$NDK_BIN/"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-strip"  "$NDK_BIN/"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-strings" "$NDK_BIN/" 2>/dev/null || ln -sf "$(which strings)" "$NDK_BIN/llvm-strings"
-    ln -sf "$NDK_TOOLCHAIN/bin/llvm-objdump" "$NDK_BIN/" 2>/dev/null || true
+    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+    export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 
-    export PATH="$NDK_TOOLCHAIN/bin:$NDK_BIN:$PATH"
-    export CC="$NDK_BIN/aarch64-clang"
-    export CXX="$NDK_BIN/aarch64-clang++"
-    export AR="$NDK_BIN/llvm-ar"
-    export NM="$NDK_BIN/llvm-nm"
-    export RANLIB="$NDK_BIN/llvm-ranlib"
-    export STRIP="$NDK_BIN/llvm-strip"
-    export CFLAGS="-O2 -fPIC --sysroot=$NDK_SYSROOT"
-    export CXXFLAGS="-O2 -fPIC --sysroot=$NDK_SYSROOT"
-    export LDFLAGS="--sysroot=$NDK_SYSROOT"
-    export PKG_CONFIG_PATH="$ANDROID_PREFIX/lib/pkgconfig"
-    export PKG_CONFIG_LIBDIR="$ANDROID_PREFIX/lib/pkgconfig"
+    case "$TARGET" in
+        linux-x64)
+            export CC=gcc CXX=g++ AR=ar NM=nm RANLIB=ranlib STRIP=strip
+            export CFLAGS="-O2 -fPIC" CXXFLAGS="-O2 -fPIC" LDFLAGS=""
+            HOST_TRIPLE=""
+            CMAKE_TOOLCHAIN=""
+            FFMPEG_TARGET_FLAGS=""
+            FFMPEG_TOOLS=""
+            ;;
+        win-x64)
+            export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
+            export AR=x86_64-w64-mingw32-ar NM=x86_64-w64-mingw32-nm
+            export RANLIB=x86_64-w64-mingw32-ranlib STRIP=x86_64-w64-mingw32-strip
+            export CFLAGS="-O2 -D_FORTIFY_SOURCE=0" CXXFLAGS="-O2 -D_FORTIFY_SOURCE=0" LDFLAGS=""
+            HOST_TRIPLE="x86_64-w64-mingw32"
+            CMAKE_TOOLCHAIN="-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres -DCMAKE_FIND_ROOT_PATH=$PREFIX -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY"
+            FFMPEG_TARGET_FLAGS="--enable-cross-compile --target-os=mingw64 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32-"
+            FFMPEG_TOOLS=""
+            ;;
+        android-arm64)
+            local NDK_BIN="$WORK_DIR/ndk-bin"
+            mkdir -p "$NDK_BIN"
+            ln -sf "$NDK_TOOLCHAIN/bin/aarch64-linux-android${NDK_API}-clang"   "$NDK_BIN/aarch64-clang"
+            ln -sf "$NDK_TOOLCHAIN/bin/aarch64-linux-android${NDK_API}-clang++" "$NDK_BIN/aarch64-clang++"
+            ln -sf "$NDK_TOOLCHAIN/bin/clang"       "$NDK_BIN/clang"
+            ln -sf "$NDK_TOOLCHAIN/bin/clang++"     "$NDK_BIN/clang++"
+            for tool in llvm-nm llvm-ar llvm-ranlib llvm-strip llvm-strings llvm-objdump; do
+                ln -sf "$NDK_TOOLCHAIN/bin/$tool" "$NDK_BIN/" 2>/dev/null || true
+            done
+            export PATH="$NDK_TOOLCHAIN/bin:$NDK_BIN:$PATH"
+            export CC="$NDK_BIN/aarch64-clang" CXX="$NDK_BIN/aarch64-clang++"
+            export AR="$NDK_BIN/llvm-ar" NM="$NDK_BIN/llvm-nm"
+            export RANLIB="$NDK_BIN/llvm-ranlib" STRIP="$NDK_BIN/llvm-strip"
+            export CFLAGS="-O2 -fPIC --sysroot=$NDK_SYSROOT"
+            export CXXFLAGS="-O2 -fPIC --sysroot=$NDK_SYSROOT"
+            export LDFLAGS="--sysroot=$NDK_SYSROOT"
+            HOST_TRIPLE="aarch64-linux-android"
+            CMAKE_TOOLCHAIN="-DCMAKE_TOOLCHAIN_FILE=$NDK_DIR/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-$NDK_API -DANDROID_STL=c++_static"
+            FFMPEG_TARGET_FLAGS="--enable-cross-compile --target-os=android --arch=aarch64 --cpu=armv8-a --host-cc=gcc --sysroot=$NDK_SYSROOT"
+            # Store tool paths for FFmpeg configure (can't use env vars as they may conflict with dep builds)
+            FFMPEG_CC="$NDK_BIN/aarch64-clang"
+            FFMPEG_CXX="$NDK_BIN/aarch64-clang++"
+            FFMPEG_TOOLS="--cc=$NDK_BIN/aarch64-clang --cxx=$NDK_BIN/aarch64-clang++ --nm=$NDK_BIN/llvm-nm --ar=$NDK_BIN/llvm-ar --ranlib=$NDK_BIN/llvm-ranlib --strip=$NDK_BIN/llvm-strip"
+            ;;
+    esac
 }
+
+# ── Helpers ──
 
 download() {
     local url="$1" dest="$2"
-    if [ ! -f "$dest" ]; then
-        echo "  Downloading $(basename "$dest")..."
-        curl -L -o "$dest" "$url"
-    fi
-}
-
-# Update config.sub/config.guess for projects with old autotools
-fix_config_sub() {
-    for f in config.sub config.guess; do
-        if [ -f "$f" ]; then
-            cp /usr/share/misc/$f . 2>/dev/null || \
-            curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/$f" > "$f"
-        fi
-    done
+    [ -f "$dest" ] || { echo "  Downloading $(basename "$dest")..."; curl -L -o "$dest" "$url"; }
 }
 
 git_clone() {
     local url="$1" dir="$2" tag="$3"
-    if [ ! -d "$dir" ]; then
-        echo "  Cloning $(basename "$dir")..."
-        git clone --depth 1 ${tag:+--branch "$tag"} "$url" "$dir"
-    fi
+    [ -d "$dir" ] || { echo "  Cloning $(basename "$dir")..."; git clone --depth 1 ${tag:+--branch "$tag"} "$url" "$dir"; }
 }
 
-# ── Individual library builds ──
+fix_config_sub() {
+    for f in config.sub config.guess; do
+        [ -f "$f" ] && { cp /usr/share/misc/$f . 2>/dev/null || curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/$f" > "$f"; }
+    done
+}
+
+autotools_host() {
+    [ -n "$HOST_TRIPLE" ] && echo "--host=$HOST_TRIPLE" || true
+}
+
+cmake_build() {
+    local src="$1"; shift
+    cmake "$src" \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DCMAKE_C_FLAGS="-O2 -fPIC" \
+        -DCMAKE_CXX_FLAGS="-O2 -fPIC" \
+        -DCMAKE_BUILD_TYPE=Release \
+        $CMAKE_TOOLCHAIN \
+        "$@"
+    make -j$NPROC && make install
+}
+
+# ── Library builds (target-agnostic) ──
 
 build_x264() {
     echo "Building x264..."
-    git_clone "https://code.videolan.org/videolan/x264.git" "$WORK_DIR/x264" "stable"
-    cd "$WORK_DIR/x264"
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --enable-static --disable-shared --disable-cli \
-        --enable-pic \
-        --host=aarch64-linux \
-        --cross-prefix="" \
-        --sysroot="$NDK_SYSROOT" \
-        --extra-cflags="$CFLAGS"
+    git_clone "https://code.videolan.org/videolan/x264.git" "$WORK_DIR/x264-src" "stable"
+    rm -rf "$WORK_DIR/x264-$TARGET" && cp -a "$WORK_DIR/x264-src" "$WORK_DIR/x264-$TARGET"
+    cd "$WORK_DIR/x264-$TARGET"
+    local host_flag="" cross_flag=""
+    case "$TARGET" in
+        linux-x64)   host_flag="--host=x86_64-linux-gnu" ;;
+        win-x64)     host_flag="--host=x86_64-w64-mingw32" ; cross_flag="--cross-prefix=x86_64-w64-mingw32-" ;;
+        android-arm64) host_flag="--host=aarch64-linux" ; cross_flag="--cross-prefix=" ;;
+    esac
+    ./configure --prefix="$PREFIX" --enable-static --disable-shared --disable-cli --enable-pic \
+        $host_flag $cross_flag --extra-cflags="$CFLAGS"
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
 
 build_x265() {
     echo "Building x265..."
-    git_clone "https://bitbucket.org/multicoreware/x265_git.git" "$WORK_DIR/x265" "stable"
-    mkdir -p "$WORK_DIR/x265-build" && cd "$WORK_DIR/x265-build"
-    cmake "$WORK_DIR/x265/source" \
-        -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI=arm64-v8a \
-        -DANDROID_PLATFORM=android-$NDK_API \
-        -DANDROID_STL=c++_static \
-        -DCMAKE_INSTALL_PREFIX="$ANDROID_PREFIX" \
-        -DCMAKE_C_FLAGS="-O2 -fPIC" \
-        -DCMAKE_CXX_FLAGS="-O2 -fPIC" \
-        -DENABLE_SHARED=OFF \
-        -DENABLE_CLI=OFF \
-        -DENABLE_ASSEMBLY=OFF
-    make -j$NPROC && make install
-
+    git_clone "https://bitbucket.org/multicoreware/x265_git.git" "$WORK_DIR/x265-src" "stable"
+    rm -rf "$WORK_DIR/x265-build-$TARGET" && mkdir -p "$WORK_DIR/x265-build-$TARGET" && cd "$WORK_DIR/x265-build-$TARGET"
+    local asm=OFF
+    [ "$TARGET" = "linux-x64" ] && asm=ON
+    cmake_build "$WORK_DIR/x265-src/source" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=$asm
     # Always write pkg-config file — x265 cmake doesn't reliably create one for cross-builds
-    cat > "$ANDROID_PREFIX/lib/pkgconfig/x265.pc" << PCEOF
-prefix=$ANDROID_PREFIX
+    local x265_private_libs="-lstdc++ -lm -lpthread"
+    [ "$TARGET" = "win-x64" ] && x265_private_libs="-lstdc++ -lm"
+    [ "$TARGET" = "android-arm64" ] && x265_private_libs="-lc++ -lm"
+    cat > "$PREFIX/lib/pkgconfig/x265.pc" << PCEOF
+prefix=$PREFIX
 exec_prefix=\${prefix}
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
-
 Name: x265
 Description: H.265/HEVC video encoder
 Version: 3.6
 Libs: -L\${libdir} -lx265
-Libs.private: -lstdc++ -lm
+Libs.private: $x265_private_libs
 Cflags: -I\${includedir}
 PCEOF
     cd "$PROJECT_DIR"
@@ -151,38 +176,44 @@ PCEOF
 
 build_libaom() {
     echo "Building libaom..."
-    git_clone "https://aomedia.googlesource.com/aom" "$WORK_DIR/aom" "v3.11.0"
-    mkdir -p "$WORK_DIR/aom-build" && cd "$WORK_DIR/aom-build"
-    cmake "$WORK_DIR/aom" \
-        -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI=arm64-v8a \
-        -DANDROID_PLATFORM=android-$NDK_API \
-        -DANDROID_STL=c++_static \
-        -DCMAKE_INSTALL_PREFIX="$ANDROID_PREFIX" \
-        -DCMAKE_C_FLAGS="-O2 -fPIC" \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DENABLE_TESTS=OFF \
-        -DENABLE_TOOLS=OFF \
-        -DENABLE_EXAMPLES=OFF \
-        -DENABLE_DOCS=OFF \
-        -DENABLE_NEON=ON \
-        -DCONFIG_RUNTIME_CPU_DETECT=0
-    make -j$NPROC && make install
+    git_clone "https://aomedia.googlesource.com/aom" "$WORK_DIR/aom-src" "v3.11.0"
+    rm -rf "$WORK_DIR/aom-build-$TARGET" && mkdir -p "$WORK_DIR/aom-build-$TARGET" && cd "$WORK_DIR/aom-build-$TARGET"
+    local extra=""
+    [ "$TARGET" = "android-arm64" ] && extra="-DENABLE_NEON=ON -DCONFIG_RUNTIME_CPU_DETECT=0"
+    cmake_build "$WORK_DIR/aom-src" -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTS=OFF -DENABLE_TOOLS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_DOCS=OFF $extra
     cd "$PROJECT_DIR"
 }
 
 build_dav1d() {
     echo "Building dav1d..."
-    git_clone "https://code.videolan.org/videolan/dav1d.git" "$WORK_DIR/dav1d" "1.5.1"
-    cd "$WORK_DIR/dav1d"
+    git_clone "https://code.videolan.org/videolan/dav1d.git" "$WORK_DIR/dav1d-src" "1.5.1"
 
-    # Write meson cross file
-    cat > "$WORK_DIR/android-arm64-cross.txt" << CROSSEOF
+    local cross_arg=""
+    if [ "$TARGET" != "linux-x64" ]; then
+        local crossfile="$WORK_DIR/dav1d-cross-$TARGET.txt"
+        case "$TARGET" in
+            win-x64)
+                cat > "$crossfile" << XEOF
 [binaries]
-c = '$NDK_BIN/aarch64-clang'
-cpp = '$NDK_BIN/aarch64-clang++'
-ar = '$NDK_BIN/llvm-ar'
-strip = '$NDK_BIN/llvm-strip'
+c = 'x86_64-w64-mingw32-gcc'
+cpp = 'x86_64-w64-mingw32-g++'
+ar = 'x86_64-w64-mingw32-ar'
+strip = 'x86_64-w64-mingw32-strip'
+windres = 'x86_64-w64-mingw32-windres'
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+XEOF
+                ;;
+            android-arm64)
+                cat > "$crossfile" << XEOF
+[binaries]
+c = '$CC'
+cpp = '$CXX'
+ar = '$AR'
+strip = '$STRIP'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -191,59 +222,45 @@ endian = 'little'
 [built-in options]
 c_args = ['-O2', '-fPIC', '--sysroot=$NDK_SYSROOT']
 c_link_args = ['--sysroot=$NDK_SYSROOT']
-CROSSEOF
+XEOF
+                ;;
+        esac
+        cross_arg="--cross-file $crossfile"
+    fi
 
-    meson setup "$WORK_DIR/dav1d-build" \
-        --prefix="$ANDROID_PREFIX" \
-        --cross-file "$WORK_DIR/android-arm64-cross.txt" \
-        --default-library=static \
-        -Denable_tools=false \
-        -Denable_tests=false
-    ninja -C "$WORK_DIR/dav1d-build" -j$NPROC
-    ninja -C "$WORK_DIR/dav1d-build" install
+    rm -rf "$WORK_DIR/dav1d-build-$TARGET"
+    cd "$WORK_DIR/dav1d-src"
+    meson setup "$WORK_DIR/dav1d-build-$TARGET" --prefix="$PREFIX" $cross_arg --default-library=static -Denable_tools=false -Denable_tests=false
+    ninja -C "$WORK_DIR/dav1d-build-$TARGET" -j$NPROC
+    ninja -C "$WORK_DIR/dav1d-build-$TARGET" install
     cd "$PROJECT_DIR"
 }
 
 build_svtav1() {
     echo "Building SVT-AV1..."
-    git_clone "https://gitlab.com/AOMediaCodec/SVT-AV1.git" "$WORK_DIR/svtav1" "v2.3.0"
-    mkdir -p "$WORK_DIR/svtav1-build" && cd "$WORK_DIR/svtav1-build"
-    # SVT-AV1 sets ARCHIVE_OUTPUT_DIRECTORY to $SOURCE/Bin/$BUILD_TYPE
-    mkdir -p "$WORK_DIR/svtav1/Bin/Release" "$WORK_DIR/svtav1/Bin/Debug" "$WORK_DIR/svtav1/Bin/RelWithDebInfo" "$WORK_DIR/svtav1/Bin/MinSizeRel"
-    cmake "$WORK_DIR/svtav1" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI=arm64-v8a \
-        -DANDROID_PLATFORM=android-$NDK_API \
-        -DANDROID_STL=c++_static \
-        -DCMAKE_INSTALL_PREFIX="$ANDROID_PREFIX" \
-        -DCMAKE_C_FLAGS="-O2 -fPIC" \
-        -DCMAKE_AR="$NDK_TOOLCHAIN/bin/llvm-ar" \
-        -DCMAKE_RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib" \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DBUILD_TESTING=OFF \
-        -DBUILD_APPS=OFF \
-        -DBUILD_DEC=ON \
-        -DBUILD_ENC=ON \
-        -DSVT_AV1_LTO=OFF \
-        -DUSE_CPUINFO=OFF
-    make -j$NPROC && make install
+    git_clone "https://gitlab.com/AOMediaCodec/SVT-AV1.git" "$WORK_DIR/svtav1-src" "v2.3.0"
+    rm -rf "$WORK_DIR/svtav1-build-$TARGET" && mkdir -p "$WORK_DIR/svtav1-build-$TARGET" && cd "$WORK_DIR/svtav1-build-$TARGET"
+    mkdir -p "$WORK_DIR/svtav1-src/Bin/Release"
+    cmake_build "$WORK_DIR/svtav1-src" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DBUILD_APPS=OFF \
+        -DBUILD_DEC=ON -DBUILD_ENC=ON -DSVT_AV1_LTO=OFF \
+        -DUSE_CPUINFO=OFF -DUSE_EXTERNAL_CPUINFO=OFF -DCOMPILE_C_ONLY=ON
     cd "$PROJECT_DIR"
 }
 
 build_libvpx() {
     echo "Building libvpx..."
-    git_clone "https://chromium.googlesource.com/webm/libvpx" "$WORK_DIR/libvpx" "v1.15.0"
-    cd "$WORK_DIR/libvpx"
-    CROSS="$NDK_BIN/aarch64-clang" \
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --target=arm64-android-gcc \
-        --enable-static --disable-shared \
-        --disable-examples --disable-tools --disable-docs --disable-unit-tests \
-        --enable-pic \
-        --enable-vp8 --enable-vp9 \
-        --enable-runtime-cpu-detect
+    git_clone "https://chromium.googlesource.com/webm/libvpx" "$WORK_DIR/libvpx-src" "v1.15.0"
+    rm -rf "$WORK_DIR/libvpx-build-$TARGET" && cp -a "$WORK_DIR/libvpx-src" "$WORK_DIR/libvpx-build-$TARGET"
+    cd "$WORK_DIR/libvpx-build-$TARGET"
+    local vpx_target=""
+    case "$TARGET" in
+        linux-x64)     vpx_target="x86_64-linux-gcc" ;;
+        win-x64)       vpx_target="x86_64-win64-gcc" ;;
+        android-arm64) vpx_target="arm64-android-gcc" ;;
+    esac
+    CROSS="$CC" ./configure --prefix="$PREFIX" --target=$vpx_target \
+        --enable-static --disable-shared --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+        --enable-pic --enable-vp8 --enable-vp9
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -251,15 +268,10 @@ build_libvpx() {
 build_lame() {
     echo "Building libmp3lame..."
     download "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz" "$WORK_DIR/lame.tar.gz"
-    mkdir -p "$WORK_DIR/lame" && tar xf "$WORK_DIR/lame.tar.gz" -C "$WORK_DIR/lame" --strip-components=1
-    cd "$WORK_DIR/lame"
+    rm -rf "$WORK_DIR/lame-$TARGET" && mkdir -p "$WORK_DIR/lame-$TARGET" && tar xf "$WORK_DIR/lame.tar.gz" -C "$WORK_DIR/lame-$TARGET" --strip-components=1
+    cd "$WORK_DIR/lame-$TARGET"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --disable-frontend \
-        --with-pic
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --disable-frontend --with-pic
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -267,14 +279,10 @@ build_lame() {
 build_opus() {
     echo "Building libopus..."
     download "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz" "$WORK_DIR/opus.tar.gz"
-    mkdir -p "$WORK_DIR/opus" && tar xf "$WORK_DIR/opus.tar.gz" -C "$WORK_DIR/opus" --strip-components=1
-    cd "$WORK_DIR/opus"
+    rm -rf "$WORK_DIR/opus-$TARGET" && mkdir -p "$WORK_DIR/opus-$TARGET" && tar xf "$WORK_DIR/opus.tar.gz" -C "$WORK_DIR/opus-$TARGET" --strip-components=1
+    cd "$WORK_DIR/opus-$TARGET"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared --disable-doc --disable-extra-programs \
-        --with-pic
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --disable-doc --disable-extra-programs --with-pic
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -282,14 +290,10 @@ build_opus() {
 build_ogg() {
     echo "Building libogg..."
     download "https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.xz" "$WORK_DIR/ogg.tar.xz"
-    mkdir -p "$WORK_DIR/ogg" && tar xf "$WORK_DIR/ogg.tar.xz" -C "$WORK_DIR/ogg" --strip-components=1
-    cd "$WORK_DIR/ogg"
+    rm -rf "$WORK_DIR/ogg-$TARGET" && mkdir -p "$WORK_DIR/ogg-$TARGET" && tar xf "$WORK_DIR/ogg.tar.xz" -C "$WORK_DIR/ogg-$TARGET" --strip-components=1
+    cd "$WORK_DIR/ogg-$TARGET"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --with-pic
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --with-pic
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -297,15 +301,10 @@ build_ogg() {
 build_vorbis() {
     echo "Building libvorbis..."
     download "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz" "$WORK_DIR/vorbis.tar.xz"
-    mkdir -p "$WORK_DIR/vorbis" && tar xf "$WORK_DIR/vorbis.tar.xz" -C "$WORK_DIR/vorbis" --strip-components=1
-    cd "$WORK_DIR/vorbis"
+    rm -rf "$WORK_DIR/vorbis-$TARGET" && mkdir -p "$WORK_DIR/vorbis-$TARGET" && tar xf "$WORK_DIR/vorbis.tar.xz" -C "$WORK_DIR/vorbis-$TARGET" --strip-components=1
+    cd "$WORK_DIR/vorbis-$TARGET"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --with-pic \
-        --with-ogg="$ANDROID_PREFIX"
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --with-pic --with-ogg="$PREFIX"
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -313,19 +312,11 @@ build_vorbis() {
 build_theora() {
     echo "Building libtheora..."
     download "https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.bz2" "$WORK_DIR/theora.tar.bz2"
-    mkdir -p "$WORK_DIR/theora" && tar xf "$WORK_DIR/theora.tar.bz2" -C "$WORK_DIR/theora" --strip-components=1
-    cd "$WORK_DIR/theora"
-    # Update config.sub/config.guess for aarch64-linux-android support
-    cp /usr/share/misc/config.sub . 2>/dev/null || curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/config.sub" > config.sub
-    cp /usr/share/misc/config.guess . 2>/dev/null || curl -sL "https://git.savannah.gnu.org/cgit/config.git/plain/config.guess" > config.guess
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared --disable-examples \
-        --with-pic \
-        --with-ogg="$ANDROID_PREFIX" \
-        --disable-oggtest --disable-vorbistest --disable-sdltest \
-        --disable-spec
+    rm -rf "$WORK_DIR/theora-$TARGET" && mkdir -p "$WORK_DIR/theora-$TARGET" && tar xf "$WORK_DIR/theora.tar.bz2" -C "$WORK_DIR/theora-$TARGET" --strip-components=1
+    cd "$WORK_DIR/theora-$TARGET"
+    fix_config_sub
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --disable-examples --with-pic \
+        --with-ogg="$PREFIX" --disable-oggtest --disable-vorbistest --disable-sdltest --disable-spec
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -333,14 +324,10 @@ build_theora() {
 build_webp() {
     echo "Building libwebp..."
     download "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz" "$WORK_DIR/webp.tar.gz"
-    mkdir -p "$WORK_DIR/webp" && tar xf "$WORK_DIR/webp.tar.gz" -C "$WORK_DIR/webp" --strip-components=1
-    cd "$WORK_DIR/webp"
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --with-pic \
-        --enable-libwebpmux --enable-libwebpdemux
+    rm -rf "$WORK_DIR/webp-$TARGET" && mkdir -p "$WORK_DIR/webp-$TARGET" && tar xf "$WORK_DIR/webp.tar.gz" -C "$WORK_DIR/webp-$TARGET" --strip-components=1
+    cd "$WORK_DIR/webp-$TARGET"
+    fix_config_sub
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --with-pic --enable-libwebpmux --enable-libwebpdemux
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
@@ -348,247 +335,189 @@ build_webp() {
 build_opencore_amr() {
     echo "Building opencore-amr..."
     download "https://downloads.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz" "$WORK_DIR/opencore-amr.tar.gz"
-    mkdir -p "$WORK_DIR/opencore-amr" && tar xf "$WORK_DIR/opencore-amr.tar.gz" -C "$WORK_DIR/opencore-amr" --strip-components=1
-    cd "$WORK_DIR/opencore-amr"
+    rm -rf "$WORK_DIR/opencore-amr-$TARGET" && mkdir -p "$WORK_DIR/opencore-amr-$TARGET" && tar xf "$WORK_DIR/opencore-amr.tar.gz" -C "$WORK_DIR/opencore-amr-$TARGET" --strip-components=1
+    cd "$WORK_DIR/opencore-amr-$TARGET"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --with-pic
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --with-pic
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
 
 build_openh264() {
     echo "Building openh264..."
-    git_clone "https://github.com/cisco/openh264.git" "$WORK_DIR/openh264" "v2.6.0"
-    cd "$WORK_DIR/openh264"
-    make -j$NPROC \
-        OS=android ARCH=arm64 NDKROOT="$NDK_DIR" TARGET="android-$NDK_API" \
-        PREFIX="$ANDROID_PREFIX" \
-        BUILDTYPE=Release \
-        libraries install-static
+    git_clone "https://github.com/cisco/openh264.git" "$WORK_DIR/openh264-src" "v2.6.0"
+    rm -rf "$WORK_DIR/openh264-$TARGET" && cp -a "$WORK_DIR/openh264-src" "$WORK_DIR/openh264-$TARGET"
+    cd "$WORK_DIR/openh264-$TARGET"
+    case "$TARGET" in
+        linux-x64)     make -j$NPROC PREFIX="$PREFIX" BUILDTYPE=Release libraries install-static ;;
+        win-x64)       make -j$NPROC OS=mingw_nt ARCH=x86_64 PREFIX="$PREFIX" BUILDTYPE=Release CC=$CC CXX=$CXX AR=$AR libraries install-static ;;
+        android-arm64) make -j$NPROC OS=android ARCH=arm64 NDKROOT="$NDK_DIR" TARGET="android-$NDK_API" PREFIX="$PREFIX" BUILDTYPE=Release libraries install-static ;;
+    esac
     cd "$PROJECT_DIR"
 }
 
 build_openjpeg() {
     echo "Building openjpeg..."
-    git_clone "https://github.com/uclouvain/openjpeg.git" "$WORK_DIR/openjpeg" "v2.5.3"
-    mkdir -p "$WORK_DIR/openjpeg-build" && cd "$WORK_DIR/openjpeg-build"
-    cmake "$WORK_DIR/openjpeg" \
-        -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI=arm64-v8a \
-        -DANDROID_PLATFORM=android-$NDK_API \
-        -DANDROID_STL=c++_static \
-        -DCMAKE_INSTALL_PREFIX="$ANDROID_PREFIX" \
-        -DCMAKE_C_FLAGS="-O2 -fPIC" \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DBUILD_CODEC=OFF \
-        -DBUILD_TESTING=OFF
-    make -j$NPROC && make install
+    git_clone "https://github.com/uclouvain/openjpeg.git" "$WORK_DIR/openjpeg-src" "v2.5.3"
+    rm -rf "$WORK_DIR/openjpeg-build-$TARGET" && mkdir -p "$WORK_DIR/openjpeg-build-$TARGET" && cd "$WORK_DIR/openjpeg-build-$TARGET"
+    cmake_build "$WORK_DIR/openjpeg-src" -DBUILD_SHARED_LIBS=OFF -DBUILD_CODEC=OFF -DBUILD_TESTING=OFF
     cd "$PROJECT_DIR"
 }
 
 build_xvid() {
     echo "Building libxvid..."
     download "https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.bz2" "$WORK_DIR/xvid.tar.bz2"
-    mkdir -p "$WORK_DIR/xvid" && tar xf "$WORK_DIR/xvid.tar.bz2" -C "$WORK_DIR/xvid" --strip-components=1
-    cd "$WORK_DIR/xvid/build/generic"
+    rm -rf "$WORK_DIR/xvid-$TARGET" && mkdir -p "$WORK_DIR/xvid-$TARGET" && tar xf "$WORK_DIR/xvid.tar.bz2" -C "$WORK_DIR/xvid-$TARGET" --strip-components=1
+    cd "$WORK_DIR/xvid-$TARGET/build/generic"
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --disable-assembly
+    ./configure --prefix="$PREFIX" $(autotools_host) --disable-assembly
+    # Remove -mno-cygwin (unsupported by modern mingw)
+    sed -i 's/-mno-cygwin//g' platform.inc 2>/dev/null || true
     make -j$NPROC && make install
-    # Remove shared lib, keep only static
-    rm -f "$ANDROID_PREFIX/lib/libxvidcore.so"* 2>/dev/null || true
+    rm -f "$PREFIX/lib/libxvidcore.so"* "$PREFIX/lib/libxvidcore.dll"* 2>/dev/null || true
     cd "$PROJECT_DIR"
 }
 
 build_zimg() {
     echo "Building zimg..."
-    git_clone "https://github.com/sekrit-twc/zimg.git" "$WORK_DIR/zimg" "release-3.0.5"
-    cd "$WORK_DIR/zimg"
+    git_clone "https://github.com/sekrit-twc/zimg.git" "$WORK_DIR/zimg-src" "release-3.0.5"
+    rm -rf "$WORK_DIR/zimg-$TARGET" && cp -a "$WORK_DIR/zimg-src" "$WORK_DIR/zimg-$TARGET"
+    cd "$WORK_DIR/zimg-$TARGET"
     autoreconf -if
     fix_config_sub
-    ./configure \
-        --prefix="$ANDROID_PREFIX" \
-        --host=aarch64-linux-android \
-        --enable-static --disable-shared \
-        --with-pic
+    ./configure --prefix="$PREFIX" $(autotools_host) --enable-static --disable-shared --with-pic
     make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
 
-# ── Build all deps then FFmpeg ──
+# ── Orchestration ──
 
 build_all_deps() {
     local license="$1"
-
-    # Ogg must come before vorbis/theora
-    build_ogg
-    build_vorbis
-    build_theora
-
-    # Independent libs
-    build_libaom
-    build_dav1d
-    build_svtav1
-    build_libvpx
-    build_lame
-    build_opus
-    build_webp
-    build_opencore_amr
-    build_openh264
-    build_openjpeg
-    build_zimg
-
-    # GPL-only
+    build_ogg; build_vorbis; build_theora
+    build_libaom; build_dav1d; build_svtav1; build_libvpx
+    build_lame; build_opus; build_webp
+    build_opencore_amr; build_openh264; build_openjpeg; build_zimg
     if [ "$license" = "gpl" ]; then
-        build_x264
-        build_x265
-        build_xvid
+        build_x264; build_x265; build_xvid
     fi
 }
 
-build_ffmpeg_android() {
+build_ffmpeg() {
     local license="$1"
-    local output_dir="$WORK_DIR/android-${license}-out"
-    local build_dir="$WORK_DIR/android-${license}-ffmpeg"
-
+    local output_dir="$WORK_DIR/${TARGET}-${license}-out"
+    local build_dir="$WORK_DIR/${TARGET}-${license}-ffmpeg"
     local gpl_flags=""
-    if [ "$license" = "gpl" ]; then
-        gpl_flags="--enable-gpl --enable-version3 --enable-libx264 --enable-libx265 --enable-libxvid"
-    fi
+    local version3="--enable-version3"
+    [ "$license" = "gpl" ] && gpl_flags="--enable-gpl --enable-libx264 --enable-libx265 --enable-libxvid"
 
-    echo "Building FFmpeg $FFMPEG_VERSION ($license) for Android arm64..."
+    echo "Building FFmpeg $FFMPEG_VERSION ($license) for $TARGET..."
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    # Unset dep-build env vars — FFmpeg configure uses its own --cc/--extra-cflags
+    unset CC CXX AR NM RANLIB STRIP CFLAGS CXXFLAGS LDFLAGS
+
+    rm -rf "$build_dir" && mkdir -p "$build_dir"
     tar xf "$WORK_DIR/ffmpeg-source.tar.xz" -C "$build_dir" --strip-components=1
 
     cd "$build_dir"
-    PKG_CONFIG_PATH="$ANDROID_PREFIX/lib/pkgconfig:$ANDROID_PREFIX/lib/x86_64-linux-gnu/pkgconfig" \
+    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/lib/x86_64-linux-gnu/pkgconfig"
+    export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/lib/x86_64-linux-gnu/pkgconfig"
     ./configure \
         --prefix="$output_dir" \
-        --enable-shared \
-        --disable-static \
-        --disable-programs \
-        --disable-doc \
-        --disable-avdevice \
-        --disable-postproc \
-        --disable-avfilter \
-        --enable-cross-compile \
-        --target-os=android \
-        --arch=aarch64 \
-        --cpu=armv8-a \
-        --cc="$NDK_BIN/aarch64-clang" \
-        --cxx="$NDK_BIN/aarch64-clang++" \
-        --nm="$NDK_BIN/llvm-nm" \
-        --ar="$NDK_BIN/llvm-ar" \
-        --ranlib="$NDK_BIN/llvm-ranlib" \
-        --strip="$NDK_BIN/llvm-strip" \
-        --host-cc=gcc \
-        --sysroot="$NDK_SYSROOT" \
-        --extra-cflags="-O2 -fPIC -I$ANDROID_PREFIX/include" \
-        --extra-ldflags="-L$ANDROID_PREFIX/lib -lm" \
+        --enable-shared --disable-static \
+        --disable-programs --disable-doc \
+        --disable-avdevice --disable-postproc --disable-avfilter \
+        $version3 \
+        $FFMPEG_TARGET_FLAGS \
+        $FFMPEG_TOOLS \
+        --extra-cflags="-O2 -fPIC -I$PREFIX/include" \
+        --extra-ldflags="-L$PREFIX/lib -L$PREFIX/lib/x86_64-linux-gnu" \
+        --extra-libs="-lm $([ "$TARGET" != "android-arm64" ] && echo "-lpthread")" \
+        --pkg-config=pkg-config \
         --pkg-config-flags="--static" \
-        --enable-libaom \
-        --enable-libdav1d \
-        --enable-libsvtav1 \
-        --enable-libvpx \
-        --enable-libmp3lame \
-        --enable-libopus \
-        --enable-libvorbis \
-        --enable-libtheora \
-        --enable-libwebp \
-        --enable-libopencore-amrnb \
-        --enable-libopencore-amrwb \
-        --enable-libopenh264 \
-        --enable-libopenjpeg \
-        --enable-libzimg \
+        --enable-libaom --enable-libdav1d --enable-libsvtav1 --enable-libvpx \
+        --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libtheora \
+        --enable-libwebp --enable-libopencore-amrnb --enable-libopencore-amrwb \
+        --enable-libopenh264 --enable-libopenjpeg --enable-libzimg \
         $gpl_flags
 
-    make -j$NPROC
-    make install
+    make -j$NPROC && make install
     cd "$PROJECT_DIR"
 }
 
-# ── Copy to runtime packages ──
-
-copy_android() {
+copy_output() {
     local license="$1"
     local suffix=""
     [ "$license" = "gpl" ] && suffix=".GPL"
-
-    local src_dir="$WORK_DIR/android-${license}-out/lib"
-    local dst_dir="$PROJECT_DIR/src/Loxifi.FFmpeg.Runtime.android-arm64${suffix}/runtimes/android-arm64/native"
-
+    local src_dir="$WORK_DIR/${TARGET}-${license}-out/lib"
+    local dst_dir="$PROJECT_DIR/src/Loxifi.FFmpeg.Runtime.${TARGET}${suffix}/runtimes/${TARGET}/native"
     mkdir -p "$dst_dir"
-    rm -f "$dst_dir"/*.so
-    cp "$src_dir/libavformat.so"   "$dst_dir/"
-    cp "$src_dir/libavcodec.so"    "$dst_dir/"
-    cp "$src_dir/libavutil.so"     "$dst_dir/"
-    cp "$src_dir/libswscale.so"    "$dst_dir/"
-    cp "$src_dir/libswresample.so" "$dst_dir/"
+    rm -f "$dst_dir"/*.so* "$dst_dir"/*.dll 2>/dev/null
 
-    echo "Copied Android arm64 ($license) to $dst_dir"
-    strings "$dst_dir/libavcodec.so" | grep "license"
+    case "$TARGET" in
+        linux-x64)
+            cp -L "$src_dir/libavformat.so.61" "$src_dir/libavcodec.so.61" "$src_dir/libavutil.so.59" \
+                  "$src_dir/libswscale.so.8" "$src_dir/libswresample.so.5" "$dst_dir/"
+            ;;
+        win-x64)
+            # FFmpeg cross-compiled for mingw produces .dll files in bin/
+            local bin_dir="$WORK_DIR/${TARGET}-${license}-out/bin"
+            cp "$bin_dir"/avformat-61.dll "$bin_dir"/avcodec-61.dll "$bin_dir"/avutil-59.dll \
+               "$bin_dir"/swscale-8.dll "$bin_dir"/swresample-5.dll "$dst_dir/" 2>/dev/null || \
+            cp "$bin_dir"/*.dll "$dst_dir/"
+            ;;
+        android-arm64)
+            cp "$src_dir/libavformat.so" "$src_dir/libavcodec.so" "$src_dir/libavutil.so" \
+               "$src_dir/libswscale.so" "$src_dir/libswresample.so" "$dst_dir/"
+            ;;
+    esac
+    echo "Copied $TARGET ($license) to $dst_dir"
+    local sample=$(ls "$dst_dir"/*avcodec* 2>/dev/null | head -1)
+    [ -n "$sample" ] && strings "$sample" | grep "license" | head -1
+}
+
+build_target_license() {
+    local target="$1" license="$2"
+    echo ""
+    echo "========================================"
+    echo "  $target — FFmpeg $FFMPEG_VERSION ($license)"
+    echo "========================================"
+
+    setup_target "$target"
+
+    download "$FFMPEG_SOURCE_URL" "$WORK_DIR/ffmpeg-source.tar.xz"
+
+    # Check tools
+    for tool in cmake meson ninja nasm autoconf automake libtool; do
+        command -v $tool &>/dev/null || { echo "ERROR: $tool not installed"; exit 1; }
+    done
+    [ "$target" = "win-x64" ] && { command -v x86_64-w64-mingw32-gcc &>/dev/null || { echo "ERROR: mingw-w64 not installed (apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64)"; exit 1; }; }
+
+    build_all_deps "$license"
+    build_ffmpeg "$license"
+    copy_output "$license"
 }
 
 # ── Main ──
 
-build_platform() {
+run_license() {
     local license="$1"
-
-    echo ""
-    echo "========================================"
-    echo "  Android arm64 — FFmpeg $FFMPEG_VERSION ($license)"
-    echo "  Cross-compiling all codec dependencies"
-    echo "========================================"
-
-    # Download FFmpeg source
-    if [ ! -f "$WORK_DIR/ffmpeg-source.tar.xz" ]; then
-        echo "Downloading FFmpeg $FFMPEG_VERSION source..."
-        curl -L -o "$WORK_DIR/ffmpeg-source.tar.xz" "$FFMPEG_SOURCE_URL"
-    fi
-
-    # Setup NDK
-    setup_ndk
-
-    # Install host tools check
-    for tool in cmake meson ninja nasm autoconf automake libtool; do
-        if ! command -v $tool &>/dev/null; then
-            echo "ERROR: $tool is required but not installed"
-            exit 1
-        fi
-    done
-
-    # Build all dependencies as static libs
-    build_all_deps "$license"
-
-    # Build FFmpeg with all deps
-    build_ffmpeg_android "$license"
-
-    # Copy to runtime package
-    copy_android "$license"
+    case "$PLATFORM_MODE" in
+        linux-x64|win-x64|android-arm64) build_target_license "$PLATFORM_MODE" "$license" ;;
+        all)
+            for t in linux-x64 android-arm64 win-x64; do
+                build_target_license "$t" "$license"
+            done
+            ;;
+        *) echo "Unknown platform: $PLATFORM_MODE"; exit 1 ;;
+    esac
 }
 
-case "$BUILD_MODE" in
-    lgpl)  build_platform "lgpl" ;;
-    gpl)   build_platform "gpl" ;;
-    both)
-        build_platform "lgpl"
-        # Reset deps for GPL (x264/x265/xvid added)
-        rm -rf "$ANDROID_PREFIX"
-        mkdir -p "$ANDROID_PREFIX/lib/pkgconfig" "$ANDROID_PREFIX/include"
-        build_platform "gpl"
-        ;;
-    *)
-        echo "Usage: $0 [lgpl|gpl|both]"
-        exit 1
-        ;;
+case "$LICENSE_MODE" in
+    lgpl) run_license "lgpl" ;;
+    gpl)  run_license "gpl" ;;
+    both) run_license "lgpl"; run_license "gpl" ;;
+    *)    echo "Usage: $0 [lgpl|gpl|both] [linux-x64|win-x64|android-arm64|all]"; exit 1 ;;
 esac
 
 echo ""

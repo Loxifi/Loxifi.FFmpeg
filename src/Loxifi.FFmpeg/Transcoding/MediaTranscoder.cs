@@ -478,6 +478,13 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
             AVFrame* frameToEncode = frame;
 
+            // Rescale frame pts from decoder timebase to encoder timebase
+            if (frame->Pts >= 0)
+            {
+                AVStream* inStream = InputStreams[inputIndex];
+                frame->Pts = AVUtil.av_rescale_q(frame->Pts, inStream->TimeBase, encCtx->TimeBase);
+            }
+
             // Apply video scaling/pixel format conversion if needed
             if (_swsCtxs[inputIndex] != nint.Zero)
             {

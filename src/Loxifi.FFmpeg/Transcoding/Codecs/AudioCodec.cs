@@ -1,3 +1,5 @@
+// AudioCodec.cs — Strongly-typed audio encoder codec identifier.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>

@@ -1,3 +1,6 @@
+// LGPL.cs — Codec definitions available in LGPL-licensed FFmpeg builds.
+// These codecs can be used without GPL licensing obligations.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>

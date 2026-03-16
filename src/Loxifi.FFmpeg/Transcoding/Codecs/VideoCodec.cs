@@ -1,3 +1,5 @@
+// VideoCodec.cs — Strongly-typed video encoder codec identifier.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>

@@ -1,4 +1,30 @@
 #!/bin/bash
+# ============================================================================
+# build.sh — Build and pack all Loxifi.FFmpeg NuGet packages
+# ============================================================================
+#
+# Builds the core P/Invoke library, all platform-specific runtime packages,
+# and both test projects (desktop + Android).
+#
+# Usage:
+#   ./build.sh [Configuration]
+#
+# Arguments:
+#   $1  Build configuration: "Release" or "Debug". Default: Release
+#
+# Prerequisites:
+#   - .NET 9 SDK
+#   - Android SDK with appropriate platform tools (for Android test build)
+#   - Java SDK (for Android test build)
+#
+# Environment variables:
+#   ANDROID_SDK_DIR  Path to Android SDK (used for Android test project)
+#   ANDROID_HOME     Fallback for ANDROID_SDK_DIR
+#   JAVA_HOME        Path to Java SDK (used for Android test project)
+#
+# Output:
+#   NuGet packages (.nupkg) are placed in ./release/
+# ============================================================================
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,18 +33,18 @@ CONFIGURATION="${1:-Release}"
 
 echo "Building Loxifi.FFmpeg ($CONFIGURATION)..."
 
-# Clean release folder
+# Clean and recreate the release output folder
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# Build and pack core library
+# Pack the core P/Invoke library
 echo "=== Loxifi.FFmpeg ==="
 dotnet pack "$SCRIPT_DIR/src/Loxifi.FFmpeg/Loxifi.FFmpeg.csproj" \
     -c "$CONFIGURATION" \
     -o "$RELEASE_DIR" \
     --nologo
 
-# Build and pack runtime packages
+# Pack platform-specific runtime packages (contain native FFmpeg shared libraries)
 for RID in win-x64 linux-x64 android-arm64; do
     echo "=== Loxifi.FFmpeg.Runtime.$RID ==="
     dotnet pack "$SCRIPT_DIR/src/Loxifi.FFmpeg.Runtime.$RID/Loxifi.FFmpeg.Runtime.$RID.csproj" \
@@ -27,13 +53,13 @@ for RID in win-x64 linux-x64 android-arm64; do
         --nologo
 done
 
-# Build desktop tests
+# Build desktop test project
 echo "=== Loxifi.FFmpeg.Tests ==="
 dotnet build "$SCRIPT_DIR/tests/Loxifi.FFmpeg.Tests/Loxifi.FFmpeg.Tests.csproj" \
     -c "$CONFIGURATION" \
     --nologo
 
-# Build Android tests (requires AndroidSdkDirectory and JavaSdkDirectory)
+# Build Android test project (requires Android SDK and Java SDK paths)
 echo "=== Loxifi.FFmpeg.AndroidTests ==="
 ANDROID_SDK_ARGS=""
 if [ -n "$ANDROID_SDK_DIR" ]; then

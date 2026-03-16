@@ -1,3 +1,5 @@
+// ContainerFormat.cs — Output container format definitions with FFmpeg name mapping.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>
@@ -45,8 +47,17 @@ public enum ContainerFormat
     Adts,
 }
 
+/// <summary>
+/// Extension methods for converting <see cref="ContainerFormat"/> values to FFmpeg format name strings.
+/// </summary>
 public static class ContainerFormatExtensions
 {
+    /// <summary>
+    /// Converts a <see cref="ContainerFormat"/> to the short name string used by FFmpeg's
+    /// <c>avformat_alloc_output_context2</c> (e.g., "mp4", "matroska", "webm").
+    /// </summary>
+    /// <param name="format">The container format to convert.</param>
+    /// <returns>The FFmpeg format name string.</returns>
     public static string ToFFmpegName(this ContainerFormat format) => format switch
     {
         ContainerFormat.Mp4 => "mp4",

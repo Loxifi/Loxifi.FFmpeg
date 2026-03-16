@@ -1,3 +1,7 @@
+// MediaInfoTests.cs — Unit tests for the Loxifi.FFmpeg library.
+// Tests cover library loading, media probing, transcoding (stream copy and re-encode),
+// codec selection, muxing, resizing, and GIF-to-MP4 conversion.
+
 using System.Runtime.CompilerServices;
 using Loxifi.FFmpeg.Native;
 using Loxifi.FFmpeg.Native.Types;
@@ -6,11 +10,15 @@ using Xunit;
 
 namespace Loxifi.FFmpeg.Tests;
 
+/// <summary>
+/// Tests for media probing and FFmpeg library loading.
+/// </summary>
 public class MediaInfoTests
 {
     static MediaInfoTests()
     {
-        // Ensure the library loader's ModuleInitializer has run
+        // Force the module initializer to run, ensuring LibraryLoader registers
+        // the DllImportResolver before any P/Invoke calls are made.
         RuntimeHelpers.RunModuleConstructor(typeof(LibraryLoader).Module.ModuleHandle);
     }
 
@@ -71,6 +79,9 @@ public class MediaInfoTests
     }
 }
 
+/// <summary>
+/// Tests for the MediaTranscoder (stream copy and re-encoding).
+/// </summary>
 public class TranscodeTests
 {
     static TranscodeTests()
@@ -97,7 +108,7 @@ public class TranscodeTests
             Assert.True(File.Exists(outputPath), "Output file should exist");
             Assert.True(new FileInfo(outputPath).Length > 0, "Output file should not be empty");
 
-            // Verify output is valid media
+            // Verify output is valid media by probing it
             MediaInfo info = MediaInfo.Probe(outputPath);
             Assert.True(info.Duration > TimeSpan.Zero);
         }
@@ -118,8 +129,8 @@ public class TranscodeTests
         {
             using var transcoder = new MediaTranscoder();
 
-            // With a near-immediate cancellation, either it throws or completes
-            // before cancellation is checked — both are valid for a tiny file
+            // With a near-immediate cancellation, either it throws OperationCanceledException
+            // or completes before cancellation is checked — both are valid for a tiny file.
             try
             {
                 await transcoder.TranscodeAsync(
@@ -132,10 +143,8 @@ public class TranscodeTests
             }
             catch (OperationCanceledException)
             {
-                // Expected for larger files
+                // Expected for larger files; test passes either way
             }
-
-            // Test passes either way — we're verifying no crash/resource leak
         }
         finally
         {
@@ -151,7 +160,6 @@ public class TranscodeTests
 
         try
         {
-            // Use synchronous progress handler to capture reports immediately
             var syncProgress = new SyncProgress<TranscodeProgress>(p => progressReports.Add(p));
 
             using var transcoder = new MediaTranscoder();
@@ -173,6 +181,9 @@ public class TranscodeTests
         }
     }
 
+    /// <summary>
+    /// Synchronous IProgress implementation for testing (avoids SynchronizationContext issues).
+    /// </summary>
     private class SyncProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
@@ -181,6 +192,9 @@ public class TranscodeTests
     }
 }
 
+/// <summary>
+/// Tests for runtime codec selection (GPL vs LGPL builds).
+/// </summary>
 public class CodecSelectionTests
 {
     static CodecSelectionTests()
@@ -191,9 +205,8 @@ public class CodecSelectionTests
     [Fact]
     public void BestVideoCodec_UsesX264_WhenGPLAvailable()
     {
-        // If libx264 is available (GPL build), GifToMp4 should use it
+        // Probe whether libx264 is available to determine expected output codec
         nint x264 = AVCodec.avcodec_find_encoder_by_name("libx264");
-        string expectedCodec = x264 != nint.Zero ? "libx264" : "mpeg4";
 
         string inputPath = Path.Combine(AppContext.BaseDirectory, "Samples", "sample.gif");
         string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_codec_test_{Guid.NewGuid()}.mp4");
@@ -206,11 +219,10 @@ public class CodecSelectionTests
             MediaInfo info = MediaInfo.Probe(outputPath);
             Assert.NotNull(info.VideoStream);
 
-            // On GPL builds, the output should be H.264 (codec_id 27)
-            // On LGPL builds, MPEG-4 (codec_id 12) or SVT-AV1
+            // On GPL builds, the output should be H.264; on LGPL builds, MPEG-4 or AV1
             if (x264 != nint.Zero)
             {
-                Assert.Equal(Native.Types.AVCodecID.AV_CODEC_ID_H264, info.VideoStream!.CodecId);
+                Assert.Equal(AVCodecID.AV_CODEC_ID_H264, info.VideoStream!.CodecId);
             }
         }
         finally
@@ -240,6 +252,9 @@ public class CodecSelectionTests
     }
 }
 
+/// <summary>
+/// Tests for high-level MediaOperations (mux, resize, GIF-to-MP4).
+/// </summary>
 public class MediaOperationsTests
 {
     static MediaOperationsTests()
@@ -250,6 +265,34 @@ public class MediaOperationsTests
     private static string SampleMp4 => Path.Combine(AppContext.BaseDirectory, "Samples", "sample.mp4");
     private static string SampleAV => Path.Combine(AppContext.BaseDirectory, "Samples", "sample_av.mp4");
     private static string SampleGif => Path.Combine(AppContext.BaseDirectory, "Samples", "sample.gif");
+
+    [Fact]
+    public void Mux_RedditDASH_HasAudio()
+    {
+        // Test muxing separate DASH video/audio segments (common with Reddit video downloads)
+        string videoPath = Path.Combine(AppContext.BaseDirectory, "Samples", "reddit_video.mp4");
+        string audioPath = Path.Combine(AppContext.BaseDirectory, "Samples", "reddit_audio.mp4");
+        if (!File.Exists(videoPath) || !File.Exists(audioPath)) return;
+
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_reddit_mux_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            MediaOperations.Mux(videoPath, audioPath, outputPath);
+
+            Assert.True(File.Exists(outputPath));
+            Assert.True(new FileInfo(outputPath).Length > 0);
+
+            MediaInfo info = MediaInfo.Probe(outputPath);
+            Assert.NotNull(info.VideoStream);
+            Assert.NotNull(info.AudioStream);
+            Assert.True(info.AudioStream!.SampleRate > 0, "Audio should have a valid sample rate");
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
 
     [Fact]
     public void Mux_CombinesVideoAndAudio()
@@ -286,7 +329,6 @@ public class MediaOperationsTests
 
             Assert.True(File.Exists(outputPath));
             long actualSize = new FileInfo(outputPath).Length;
-            // Allow some tolerance — bitrate targeting isn't exact
             Assert.True(actualSize > 0, "Output should not be empty");
 
             MediaInfo info = MediaInfo.Probe(outputPath);

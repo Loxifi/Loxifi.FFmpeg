@@ -1,3 +1,6 @@
+// GPL.cs — Codec definitions available in GPL-licensed FFmpeg builds.
+// Includes all LGPL codecs plus GPL-only codecs like libx264 and libx265.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>

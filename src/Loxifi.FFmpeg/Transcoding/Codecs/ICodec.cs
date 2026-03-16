@@ -1,3 +1,5 @@
+// ICodec.cs — Interface for FFmpeg encoder codec identifiers.
+
 namespace Loxifi.FFmpeg.Transcoding.Codecs;
 
 /// <summary>

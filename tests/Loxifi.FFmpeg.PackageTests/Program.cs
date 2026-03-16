@@ -1,16 +1,23 @@
+// Program.cs — Standalone smoke test for the Loxifi.FFmpeg NuGet package.
+// Runs outside the xUnit framework to verify that native library resolution works
+// correctly when the package is consumed as a NuGet dependency. Prints diagnostic
+// information about the runtime environment and checks that all five FFmpeg libraries
+// load and return valid version numbers.
+
 using System.Runtime.CompilerServices;
 using Loxifi.FFmpeg.Native;
 using Loxifi.FFmpeg.Transcoding;
 
+// Force the module initializer to run
 RuntimeHelpers.RunModuleConstructor(typeof(LibraryLoader).Module.ModuleHandle);
 
-// Diagnostics
+// Print runtime diagnostics for troubleshooting native library resolution
 Console.WriteLine($"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
 Console.WriteLine($"RID: {System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}");
 Console.WriteLine($"BaseDir: {AppContext.BaseDirectory}");
 Console.WriteLine($"Assembly: {typeof(LibraryLoader).Assembly.Location}");
 
-// Check if native files exist next to the assembly
+// Check if native files exist in expected locations
 string baseDir = AppContext.BaseDirectory;
 foreach (string f in new[] { "avutil-59.dll", "libavutil.so.59", "avutil.dll", "libavutil.so" })
 {
@@ -41,7 +48,7 @@ void Assert(bool condition, string name)
     }
 }
 
-// Test 1: Library loading
+// Test each FFmpeg library loads and returns a valid version
 try
 {
     uint ver = AVUtil.avutil_version();

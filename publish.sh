@@ -1,4 +1,27 @@
 #!/bin/bash
+# ============================================================================
+# publish.sh — Version, test, pack, and publish all NuGet packages
+# ============================================================================
+#
+# Bumps the semantic version, runs the full test suite, packs all NuGet
+# packages with the new version, pushes them to nuget.org, then commits
+# the version bump and creates a git tag.
+#
+# Usage:
+#   ./publish.sh [major|minor|patch]
+#
+# Arguments:
+#   $1  Version bump type. Default: patch
+#
+# Prerequisites:
+#   - .NET 9 SDK
+#   - NUGET_API_KEY environment variable set to a valid NuGet API key
+#   - All tests must pass (test.sh is run automatically)
+#   - Clean git working tree recommended
+#
+# Environment variables:
+#   NUGET_API_KEY  (required) API key for pushing to nuget.org
+# ============================================================================
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,7 +30,9 @@ NUGET_KEY="${NUGET_API_KEY:?Set NUGET_API_KEY environment variable}"
 NUGET_SOURCE="https://api.nuget.org/v3/index.json"
 RELEASE_DIR="$SCRIPT_DIR/release"
 
-# ── Version management ──
+# ── Version management ────────────────────────────────────────────────────────
+# Reads the current version from VERSION file, bumps it according to the
+# requested level (major/minor/patch), and computes the new version string.
 
 if [ ! -f "$VERSION_FILE" ]; then
     echo "1.0.0" > "$VERSION_FILE"
@@ -16,7 +41,7 @@ fi
 CURRENT_VERSION=$(cat "$VERSION_FILE")
 echo "Current version: $CURRENT_VERSION"
 
-# Parse semver
+# Parse semver components
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
 BUMP="${1:-patch}"
@@ -30,7 +55,8 @@ esac
 NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 echo "New version: $NEW_VERSION"
 
-# ── Run all tests ──
+# ── Run all tests ─────────────────────────────────────────────────────────────
+# Ensures the full test suite passes before publishing to nuget.org.
 
 echo ""
 echo "========================================"
@@ -42,7 +68,8 @@ echo "========================================"
 echo ""
 echo "All tests passed."
 
-# ── Build and pack ──
+# ── Build and pack ────────────────────────────────────────────────────────────
+# Packs all projects (core library + all runtime packages) with the new version.
 
 echo ""
 echo "========================================"
@@ -75,7 +102,9 @@ echo ""
 echo "Packages:"
 ls -1 "$RELEASE_DIR"/*.nupkg
 
-# ── Push to NuGet ──
+# ── Push to NuGet ─────────────────────────────────────────────────────────────
+# Pushes each .nupkg to nuget.org. --skip-duplicate avoids errors if a package
+# version was already published (e.g. from a partial previous run).
 
 echo ""
 echo "========================================"
@@ -90,7 +119,7 @@ for pkg in "$RELEASE_DIR"/*.nupkg; do
         --skip-duplicate
 done
 
-# ── Update version file and commit ──
+# ── Update version file, commit, and tag ──────────────────────────────────────
 
 echo "$NEW_VERSION" > "$VERSION_FILE"
 

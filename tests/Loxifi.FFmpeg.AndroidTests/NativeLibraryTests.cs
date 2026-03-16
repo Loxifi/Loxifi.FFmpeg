@@ -1,10 +1,16 @@
-using System.Runtime.InteropServices;
+// NativeLibraryTests.cs — Android-specific tests for FFmpeg native library loading.
+// Verifies that all five FFmpeg shared libraries load correctly on Android and that
+// basic allocation/deallocation functions work without crashing.
+
 using Loxifi.FFmpeg.Native;
 using Loxifi.FFmpeg.Native.Types;
 using Xunit;
 
 namespace Loxifi.FFmpeg.AndroidTests;
 
+/// <summary>
+/// Tests that FFmpeg native libraries load and function correctly on Android.
+/// </summary>
 public class NativeLibraryTests
 {
     [Fact]

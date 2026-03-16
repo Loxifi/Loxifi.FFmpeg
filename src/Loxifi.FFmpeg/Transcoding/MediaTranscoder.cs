@@ -1,3 +1,8 @@
+// MediaTranscoder.cs — Core transcoding engine that reads packets from an input,
+// optionally decodes/re-encodes them (with pixel format conversion and scaling via
+// libswscale), and writes the result to an output container. Supports both file paths
+// and .NET Streams as input/output via StreamIOContext.
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Loxifi.FFmpeg.Helpers;
@@ -7,20 +12,62 @@ using Loxifi.FFmpeg.Native.Types;
 
 namespace Loxifi.FFmpeg.Transcoding;
 
+/// <summary>
+/// Transcodes media files or streams, supporting both stream copy (remuxing) and
+/// re-encoding with codec/resolution/bitrate changes. Manages the full lifecycle of
+/// FFmpeg contexts (format, codec, scaler, resampler) and ensures proper cleanup.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The transcoder uses FFmpeg's "push" API: packets are read from the demuxer, sent to
+/// the decoder, decoded frames are optionally scaled/converted, then sent to the encoder,
+/// and the resulting encoded packets are written to the muxer.
+/// </para>
+/// <para>
+/// Audio re-encoding is intentionally not implemented — audio streams are always stream-copied.
+/// This is because configuring audio encoders requires setting <c>sample_fmt</c> and
+/// <c>ch_layout</c> fields deep in AVCodecContext that are beyond our mapped struct fields.
+/// Stream copy is sufficient for the primary use case (video resize to target file size).
+/// </para>
+/// </remarks>
 public sealed unsafe class MediaTranscoder : IDisposable
 {
     private AVFormatContext* _inputCtx;
     private AVFormatContext* _outputCtx;
+
+    /// <summary>Array of decoder contexts, one per input stream. Null entries mean stream copy.</summary>
     private AVCodecContext** _decoderCtxs;
+
+    /// <summary>Array of encoder contexts, one per input stream. Null entries mean stream copy.</summary>
     private AVCodecContext** _encoderCtxs;
-    private nint* _swsCtxs;      // SwsContext*[]
-    private nint* _swrCtxs;      // SwrContext*[]
-    private int* _streamMap;     // input stream index -> output stream index (-1 = skip)
+
+    /// <summary>Array of SwsContext pointers for video scaling/pixel format conversion, one per input stream.</summary>
+    private nint* _swsCtxs;
+
+    /// <summary>Array of SwrContext pointers for audio resampling, one per input stream (currently unused).</summary>
+    private nint* _swrCtxs;
+
+    /// <summary>
+    /// Maps input stream indices to output stream indices. A value of -1 means the
+    /// input stream is skipped (e.g., subtitle or data streams).
+    /// </summary>
+    private int* _streamMap;
+
     private int _nbInputStreams;
     private bool _disposed;
+
+    /// <summary>Custom I/O context for stream-based input (null for file-based input).</summary>
     private StreamIOContext? _inputIO;
+
+    /// <summary>Custom I/O context for stream-based output (null for file-based output).</summary>
     private StreamIOContext? _outputIO;
 
+    /// <summary>
+    /// Transcodes a media file from the input path to the output path.
+    /// </summary>
+    /// <param name="options">Transcoding configuration (paths, codecs, bitrates, resolution).</param>
+    /// <param name="progress">Optional progress reporter receiving percentage and timing updates.</param>
+    /// <param name="ct">Cancellation token checked between each packet.</param>
     public void Transcode(
         TranscodeOptions options,
         IProgress<TranscodeProgress>? progress = null,
@@ -38,6 +85,13 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Transcodes a media file asynchronously on a thread pool thread.
+    /// </summary>
+    /// <param name="options">Transcoding configuration.</param>
+    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A task that completes when transcoding finishes.</returns>
     public Task TranscodeAsync(
         TranscodeOptions options,
         IProgress<TranscodeProgress>? progress = null,
@@ -46,6 +100,12 @@ public sealed unsafe class MediaTranscoder : IDisposable
         return Task.Run(() => Transcode(options, progress, ct), ct);
     }
 
+    /// <summary>
+    /// Transcodes media from an input stream to an output stream.
+    /// </summary>
+    /// <param name="options">Stream-based transcoding configuration.</param>
+    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="ct">Cancellation token.</param>
     public void Transcode(
         StreamTranscodeOptions options,
         IProgress<TranscodeProgress>? progress = null,
@@ -63,6 +123,13 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Transcodes media from streams asynchronously on a thread pool thread.
+    /// </summary>
+    /// <param name="options">Stream-based transcoding configuration.</param>
+    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A task that completes when transcoding finishes.</returns>
     public Task TranscodeAsync(
         StreamTranscodeOptions options,
         IProgress<TranscodeProgress>? progress = null,
@@ -71,15 +138,24 @@ public sealed unsafe class MediaTranscoder : IDisposable
         return Task.Run(() => Transcode(options, progress, ct), ct);
     }
 
+    /// <summary>Convenience accessor for input stream array.</summary>
     private AVStream** InputStreams => _inputCtx->Streams;
+
+    /// <summary>Convenience accessor for output stream array.</summary>
     private AVStream** OutputStreams => (AVStream**)_outputCtx->Streams;
 
+    /// <summary>
+    /// Opens a .NET stream as input by creating a custom AVIOContext and
+    /// attaching it to the format context before opening.
+    /// </summary>
     private void OpenInput(Stream inputStream)
     {
         _inputIO = StreamIOContext.ForReading(inputStream);
 
         _inputCtx = AVFormat.avformat_alloc_context();
         if (_inputCtx == null) throw new FFmpegException(-1, "Failed to allocate format context");
+
+        // Attach custom I/O before avformat_open_input so FFmpeg reads from our stream
         _inputCtx->Pb = _inputIO.Context;
 
         fixed (AVFormatContext** pInputCtx = &_inputCtx)
@@ -96,6 +172,9 @@ public sealed unsafe class MediaTranscoder : IDisposable
         InitStreamArrays();
     }
 
+    /// <summary>
+    /// Opens a file path as input using FFmpeg's built-in file I/O.
+    /// </summary>
     private void OpenInput(string inputPath)
     {
         fixed (AVFormatContext** pInputCtx = &_inputCtx)
@@ -120,6 +199,10 @@ public sealed unsafe class MediaTranscoder : IDisposable
         InitStreamArrays();
     }
 
+    /// <summary>
+    /// Allocates per-stream arrays for decoders, encoders, scalers, resamplers, and the
+    /// stream index mapping. All entries are zero-initialized; the stream map defaults to -1 (skip).
+    /// </summary>
     private void InitStreamArrays()
     {
         _nbInputStreams = (int)_inputCtx->NbStreams;
@@ -129,12 +212,16 @@ public sealed unsafe class MediaTranscoder : IDisposable
         _swrCtxs = (nint*)NativeMemory.AllocZeroed((nuint)_nbInputStreams, (nuint)sizeof(nint));
         _streamMap = (int*)NativeMemory.Alloc((nuint)_nbInputStreams, (nuint)sizeof(int));
 
+        // Initialize all stream mappings to -1 (skip) until configured in SetupOutputStreams
         for (int i = 0; i < _nbInputStreams; i++)
         {
             _streamMap[i] = -1;
         }
     }
 
+    /// <summary>
+    /// Sets up the output context for stream-based output using a custom AVIOContext.
+    /// </summary>
     private void SetupOutput(StreamTranscodeOptions streamOptions)
     {
         var options = streamOptions.ToFileOptions();
@@ -156,6 +243,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
             Marshal.FreeHGlobal(formatNamePtr);
         }
 
+        // Attach custom I/O for stream-based writing
         _outputCtx->Pb = _outputIO.Context;
 
         SetupOutputStreams(options);
@@ -165,6 +253,9 @@ public sealed unsafe class MediaTranscoder : IDisposable
             "Failed to write header");
     }
 
+    /// <summary>
+    /// Sets up the output context for file-based output, opening the file for writing.
+    /// </summary>
     private void SetupOutput(TranscodeOptions options)
     {
         nint formatNamePtr = options.OutputFormatName is not null
@@ -193,7 +284,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
         SetupOutputStreams(options);
 
-        // Open output file
+        // Open output file (unless the format is "NOFILE", e.g., for raw codecs)
         AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
         if ((oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
         {
@@ -215,6 +306,11 @@ public sealed unsafe class MediaTranscoder : IDisposable
             "Failed to write header");
     }
 
+    /// <summary>
+    /// Iterates input streams and configures each one for either stream copy or re-encoding.
+    /// Only video and audio streams are carried over; subtitle, data, and attachment streams
+    /// are skipped (streamMap entry stays -1).
+    /// </summary>
     private void SetupOutputStreams(TranscodeOptions options)
     {
         int outputStreamIndex = 0;
@@ -224,6 +320,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
             AVStream* inStream = InputStreams[i];
             AVCodecParameters* codecpar = inStream->Codecpar;
 
+            // Skip non-audio/video streams (subtitles, data, attachments)
             if (codecpar->CodecType != AVMediaType.AVMEDIA_TYPE_VIDEO &&
                 codecpar->CodecType != AVMediaType.AVMEDIA_TYPE_AUDIO)
             {
@@ -234,6 +331,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
             bool isVideo = codecpar->CodecType == AVMediaType.AVMEDIA_TYPE_VIDEO;
             string? codecName = isVideo ? options.VideoCodecName : options.AudioCodecName;
+            // If a codec is specified, re-encode; otherwise stream copy (passthrough)
             bool reencode = codecName is not null;
 
             if (reencode)
@@ -247,6 +345,11 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Configures a stream for pass-through (stream copy). Copies codec parameters from
+    /// input to output without setting up any decoder or encoder. This is the fastest mode
+    /// since no decoding/encoding occurs.
+    /// </summary>
     private void SetupStreamCopy(AVStream* inStream, AVCodecParameters* codecpar)
     {
         AVStream* outStream = AVFormat.avformat_new_stream(_outputCtx, nint.Zero);
@@ -256,12 +359,22 @@ public sealed unsafe class MediaTranscoder : IDisposable
             AVCodec.avcodec_parameters_copy(outStream->Codecpar, codecpar),
             "Failed to copy codec parameters");
 
+        // Clear codec tag so the muxer can assign the correct one for the output container
         outStream->Codecpar->CodecTag = 0;
     }
 
+    /// <summary>
+    /// Configures a stream for re-encoding: sets up both decoder and encoder contexts,
+    /// and optionally a pixel format converter / scaler (SwsContext).
+    /// </summary>
+    /// <remarks>
+    /// For audio streams, this method falls back to stream copy because configuring audio
+    /// encoders requires setting sample_fmt and ch_layout in AVCodecContext, which are
+    /// fields beyond our partial struct mapping.
+    /// </remarks>
     private void SetupReencode(int streamIndex, AVStream* inStream, AVCodecParameters* codecpar, string codecName, TranscodeOptions options)
     {
-        // Setup decoder
+        // --- Decoder setup ---
         nint decoder = AVCodec.avcodec_find_decoder(codecpar->CodecId);
         if (decoder == nint.Zero) throw new FFmpegException(-1, "Decoder not found");
 
@@ -276,17 +389,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
             "Failed to open decoder");
         _decoderCtxs[streamIndex] = decCtx;
 
-        // Setup encoder
-        nint encoderPtr = Marshal.StringToHGlobalAnsi(codecName);
-        nint encoder;
-        try
-        {
-            encoder = AVCodec.avcodec_find_encoder_by_name(codecName);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(encoderPtr);
-        }
+        // --- Encoder setup ---
+        nint encoder = AVCodec.avcodec_find_encoder_by_name(codecName);
         if (encoder == nint.Zero) throw new FFmpegException(-1, $"Encoder '{codecName}' not found");
 
         AVCodecContext* encCtx = AVCodec.avcodec_alloc_context3(encoder);
@@ -297,14 +401,18 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
         if (codecpar->CodecType == AVMediaType.AVMEDIA_TYPE_VIDEO)
         {
+            // Use requested dimensions, or keep original if not specified
             encCtx->Width = options.Width > 0 ? options.Width : codecpar->Width;
             encCtx->Height = options.Height > 0 ? options.Height : codecpar->Height;
 
-            // Most encoders require yuv420p; use it unless input is already compatible
+            // Most encoders (especially libx264) require YUV420P pixel format.
+            // If the input is in a different format (e.g., RGB from GIF, NV12 from
+            // hardware decode), the SwsContext will handle the conversion.
             AVPixelFormat inputFmt = (AVPixelFormat)codecpar->Format;
             encCtx->PixFmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
 
-            // Set framerate and derive timebase as its inverse
+            // Derive encoder timebase from framerate (timebase = 1/fps).
+            // Fall back to 25fps if the input doesn't have a known frame rate.
             encCtx->FrameRate = inStream->AvgFrameRate.Denominator > 0
                 ? inStream->AvgFrameRate
                 : new AVRational(25, 1);
@@ -312,7 +420,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
             if (options.VideoBitRate > 0) encCtx->BitRate = options.VideoBitRate;
 
-            // Setup scaler if resolution or pixel format changes
+            // Create a scaler if the resolution or pixel format differs between input and output.
+            // sws_scale handles both scaling and pixel format conversion in a single pass.
             if (encCtx->Width != codecpar->Width ||
                 encCtx->Height != codecpar->Height ||
                 encCtx->PixFmt != inputFmt)
@@ -327,13 +436,12 @@ public sealed unsafe class MediaTranscoder : IDisposable
                     throw new FFmpegException(-1, "Failed to create sws context");
             }
         }
-        else // Audio
+        else // Audio — fall back to stream copy
         {
-            // For audio re-encoding, we stream copy instead — re-encoding audio
-            // requires setting sample_fmt and ch_layout deep in AVCodecContext
-            // which are beyond our mapped struct fields. Stream copy is sufficient
-            // for the resize use case (video bitrate dominates file size).
-            // Fall back to stream copy for audio.
+            // Audio re-encoding is not supported in this transcoder because configuring
+            // audio encoders requires setting sample_fmt and ch_layout deep in AVCodecContext,
+            // which are beyond our partial struct mapping. Stream copy is sufficient for
+            // the resize use case since video bitrate dominates file size.
             AVCodec.avcodec_free_context(&decCtx);
             _decoderCtxs[streamIndex] = null;
             AVCodec.avcodec_free_context(&encCtx);
@@ -345,23 +453,31 @@ public sealed unsafe class MediaTranscoder : IDisposable
             return;
         }
 
-        // Set global header flag if needed
+        // Some containers (e.g., MP4) require codec extradata in the file header rather
+        // than inline in the stream. Setting GLOBAL_HEADER tells the encoder to write
+        // SPS/PPS (for H.264) to extradata instead of prepending to each keyframe.
         AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
         if ((oformat->Flags & (int)AVFormatFlags.AVFMT_GLOBALHEADER) != 0)
         {
             encCtx->Flags |= (int)AVCodecFlags.AV_CODEC_FLAG_GLOBAL_HEADER;
         }
 
-
         FFmpegException.ThrowIfError(
             AVCodec.avcodec_open2(encCtx, encoder, null),
             "Failed to open encoder");
 
+        // Copy encoder parameters (codec ID, extradata, pixel format, etc.) to the
+        // output stream so the muxer knows how to write the container headers.
         FFmpegException.ThrowIfError(
             AVCodec.avcodec_parameters_from_context(outStream->Codecpar, encCtx),
             "Failed to copy encoder parameters to output stream");
     }
 
+    /// <summary>
+    /// Main transcoding loop. Reads packets from the demuxer and either stream-copies them
+    /// or decodes/re-encodes them, writing the result to the output. Reports progress based
+    /// on packet timestamps relative to the total input duration.
+    /// </summary>
     private void TranscodeLoop(
         TranscodeOptions options,
         IProgress<TranscodeProgress>? progress,
@@ -375,6 +491,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
             throw new FFmpegException(-1, "Failed to allocate packet/frame");
 
         Stopwatch sw = Stopwatch.StartNew();
+        // Duration is in AV_TIME_BASE units (microseconds)
         long totalDuration = _inputCtx->Duration;
 
         try
@@ -388,6 +505,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
                 FFmpegException.ThrowIfError(ret, "Error reading frame");
 
                 int inputStreamIndex = packet->StreamIndex;
+
+                // Skip packets from unmapped streams (subtitles, data, etc.)
                 if (inputStreamIndex >= _nbInputStreams || _streamMap[inputStreamIndex] < 0)
                 {
                     AVCodec.av_packet_unref(packet);
@@ -398,17 +517,19 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
                 if (_decoderCtxs[inputStreamIndex] != null)
                 {
-                    // Re-encode path
+                    // Re-encode path: decode -> optionally scale -> encode -> write
                     ProcessReencode(packet, frame, scaledFrame, inputStreamIndex, outputStreamIndex);
                 }
                 else
                 {
-                    // Stream copy path
+                    // Stream copy path: rescale timestamps and pass through unchanged
                     AVStream* inStream = InputStreams[inputStreamIndex];
                     AVStream* outStream = OutputStreams[outputStreamIndex];
 
                     packet->StreamIndex = outputStreamIndex;
+                    // Convert packet timestamps from input stream timebase to output stream timebase
                     AVCodec.av_packet_rescale_ts(packet, inStream->TimeBase, outStream->TimeBase);
+                    // Reset file position since it's meaningless in the output file
                     packet->Pos = -1;
 
                     FFmpegException.ThrowIfError(
@@ -416,7 +537,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
                         "Error writing packet");
                 }
 
-                // Report progress
+                // Report progress based on the current packet's presentation timestamp
                 if (progress != null && totalDuration > 0 && totalDuration < long.MaxValue / 2)
                 {
                     long pos = packet->Pts >= 0 ? packet->Pts : packet->Dts;
@@ -424,7 +545,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
                     {
                         AVStream* inStream = _inputCtx->Streams[inputStreamIndex];
                         double posSeconds = pos * inStream->TimeBase.ToDouble();
-                        double durationSeconds = totalDuration / 1_000_000.0;
+                        double durationSeconds = totalDuration / 1_000_000.0; // Convert microseconds to seconds
+                        // Guard against nonsensical values from corrupt metadata
                         if (posSeconds >= 0 && posSeconds < 1e9 && durationSeconds > 0 && durationSeconds < 1e9)
                         {
                             double percent = Math.Clamp(posSeconds / durationSeconds * 100.0, 0, 100);
@@ -441,7 +563,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
                 AVCodec.av_packet_unref(packet);
             }
 
-            // Flush encoders
+            // Flush all encoders by sending a null frame, which tells the encoder to
+            // output any buffered frames (e.g., B-frames waiting for reordering).
             for (int i = 0; i < _nbInputStreams; i++)
             {
                 if (_encoderCtxs[i] != null)
@@ -450,6 +573,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
                 }
             }
 
+            // Write the container trailer (e.g., moov atom for MP4)
             FFmpegException.ThrowIfError(
                 AVFormat.av_write_trailer(_outputCtx),
                 "Error writing trailer");
@@ -462,14 +586,22 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Processes a single packet through the decode -> scale -> encode pipeline.
+    /// Uses FFmpeg's "push/pull" codec API: send_packet pushes data in, receive_frame
+    /// pulls decoded frames out, and the same pattern is used for encoding.
+    /// </summary>
     private void ProcessReencode(AVPacket* packet, AVFrame* frame, AVFrame* scaledFrame, int inputIndex, int outputIndex)
     {
         AVCodecContext* decCtx = _decoderCtxs[inputIndex];
         AVCodecContext* encCtx = _encoderCtxs[inputIndex];
 
+        // Send the compressed packet to the decoder
         int ret = AVCodec.avcodec_send_packet(decCtx, packet);
+        // EAGAIN means the decoder's internal buffer is full; we need to drain frames first
         if (ret < 0 && ret != AVErrors.AVERROR_EAGAIN) return;
 
+        // Pull all available decoded frames from the decoder
         while (true)
         {
             ret = AVCodec.avcodec_receive_frame(decCtx, frame);
@@ -478,14 +610,17 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
             AVFrame* frameToEncode = frame;
 
-            // Rescale frame pts from decoder timebase to encoder timebase
+            // Rescale frame PTS from the decoder's timebase (typically the input stream's
+            // timebase) to the encoder's timebase (typically 1/fps). This ensures the
+            // encoder stamps output packets with correct timestamps.
             if (frame->Pts >= 0)
             {
                 AVStream* inStream = InputStreams[inputIndex];
                 frame->Pts = AVUtil.av_rescale_q(frame->Pts, inStream->TimeBase, encCtx->TimeBase);
             }
 
-            // Apply video scaling/pixel format conversion if needed
+            // Apply video scaling and/or pixel format conversion if a SwsContext was created.
+            // sws_scale converts the frame in-place from source format/resolution to target.
             if (_swsCtxs[inputIndex] != nint.Zero)
             {
                 AVUtil.av_frame_unref(scaledFrame);
@@ -496,6 +631,10 @@ public sealed unsafe class MediaTranscoder : IDisposable
                     AVUtil.av_frame_get_buffer(scaledFrame, 0),
                     "Failed to allocate scaled frame buffer");
 
+                // AVFrame stores data pointers and linesizes as fixed-size arrays.
+                // We extract them into managed arrays for the pinned pointer call.
+                // Data pointers point to each plane (Y, U, V for YUV420P; R, G, B for RGB).
+                // Linesize is the byte stride of each plane (may include padding for alignment).
                 byte*[] srcData = [
                     (byte*)frame->Data0, (byte*)frame->Data1,
                     (byte*)frame->Data2, (byte*)frame->Data3,
@@ -516,6 +655,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
                     dstLinesize[j] = scaledFrame->Linesize[j];
                 }
 
+                // Pin the managed arrays and call sws_scale, which performs the actual
+                // pixel format conversion and/or resolution scaling in a single pass.
                 fixed (byte** srcPtr = srcData)
                 fixed (byte** dstPtr = dstData)
                 fixed (int* srcStridePtr = srcLinesize)
@@ -524,15 +665,16 @@ public sealed unsafe class MediaTranscoder : IDisposable
                     SWScale.sws_scale(
                         _swsCtxs[inputIndex],
                         srcPtr, srcStridePtr,
-                        0, frame->Height,
+                        0, frame->Height, // Process all rows starting from row 0
                         dstPtr, dstStridePtr);
                 }
 
+                // Carry over the presentation timestamp to the scaled frame
                 scaledFrame->Pts = frame->Pts;
                 frameToEncode = scaledFrame;
             }
 
-            // Apply audio resampling if needed
+            // Apply audio resampling if a SwrContext was created (currently unused)
             if (_swrCtxs[inputIndex] != nint.Zero)
             {
                 SWResample.swr_convert_frame(_swrCtxs[inputIndex], scaledFrame, frame);
@@ -547,6 +689,10 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends a frame to the encoder and writes all resulting packets to the output.
+    /// Pass a null frame to flush the encoder (drain buffered frames).
+    /// </summary>
     private void EncodeAndWrite(AVCodecContext* encCtx, AVFrame* frame, int outputStreamIndex)
     {
         int ret = AVCodec.avcodec_send_frame(encCtx, frame);
@@ -563,6 +709,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
                 outPkt->StreamIndex = outputStreamIndex;
                 AVStream* outStream = OutputStreams[outputStreamIndex];
+                // Convert packet timestamps from encoder timebase to output stream timebase
                 AVCodec.av_packet_rescale_ts(outPkt, encCtx->TimeBase, outStream->TimeBase);
 
                 FFmpegException.ThrowIfError(
@@ -576,15 +723,24 @@ public sealed unsafe class MediaTranscoder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Flushes the encoder for a given stream by sending a null frame, which tells
+    /// the encoder to output any remaining buffered frames (e.g., B-frames).
+    /// </summary>
     private void FlushEncoder(int inputIndex, int outputIndex)
     {
         AVCodecContext* encCtx = _encoderCtxs[inputIndex];
-        // Send null frame to flush
         EncodeAndWrite(encCtx, null, outputIndex);
     }
 
+    /// <summary>
+    /// Releases all FFmpeg resources: codec contexts, scalers, resamplers, format contexts,
+    /// and StreamIOContext wrappers. Carefully handles the distinction between file-based
+    /// and stream-based I/O to avoid double-freeing AVIO contexts.
+    /// </summary>
     private void Cleanup()
     {
+        // Free per-stream resources (decoders, encoders, scalers, resamplers)
         if (_decoderCtxs != null)
         {
             for (int i = 0; i < _nbInputStreams; i++)
@@ -621,11 +777,13 @@ public sealed unsafe class MediaTranscoder : IDisposable
             _streamMap = null;
         }
 
+        // Free output context. Must handle file-based vs stream-based I/O differently:
+        // - File-based: we opened the AVIO via avio_open, so we must close it via avio_closep.
+        // - Stream-based: the StreamIOContext owns the pb; we just null it out to prevent double-free.
         if (_outputCtx != null)
         {
             if (_outputIO == null)
             {
-                // File-based output — close the AVIO we opened
                 AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
                 if (oformat != null && (_outputCtx->Pb != null) &&
                     (oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
@@ -635,18 +793,18 @@ public sealed unsafe class MediaTranscoder : IDisposable
             }
             else
             {
-                // Stream-based output — StreamIOContext owns the pb
                 _outputCtx->Pb = null;
             }
             AVFormat.avformat_free_context(_outputCtx);
             _outputCtx = null;
         }
 
+        // Free input context. For stream-based input, detach pb before close to prevent
+        // avformat_close_input from freeing the StreamIOContext-owned AVIO.
         if (_inputCtx != null)
         {
             if (_inputIO != null)
             {
-                // Stream-based input — detach pb before close
                 _inputCtx->Pb = null;
             }
             fixed (AVFormatContext** p = &_inputCtx)
@@ -655,12 +813,17 @@ public sealed unsafe class MediaTranscoder : IDisposable
             }
         }
 
+        // Dispose StreamIOContext wrappers (frees GCHandle and AVIOContext)
         _inputIO?.Dispose();
         _inputIO = null;
         _outputIO?.Dispose();
         _outputIO = null;
     }
 
+    /// <summary>
+    /// Disposes the transcoder, releasing all native resources.
+    /// Safe to call multiple times.
+    /// </summary>
     public void Dispose()
     {
         if (!_disposed)

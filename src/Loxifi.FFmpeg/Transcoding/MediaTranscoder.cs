@@ -232,7 +232,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
             _streamMap[i] = outputStreamIndex++;
 
             bool isVideo = codecpar->CodecType == AVMediaType.AVMEDIA_TYPE_VIDEO;
-            string? codecName = isVideo ? options.VideoCodec : options.AudioCodec;
+            string? codecName = isVideo ? options.VideoCodecName : options.AudioCodecName;
             bool reencode = codecName is not null;
 
             if (reencode)

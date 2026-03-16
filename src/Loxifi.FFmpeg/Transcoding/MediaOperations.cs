@@ -149,8 +149,8 @@ public static unsafe class MediaOperations
         {
             InputPath = inputPath,
             OutputPath = outputPath,
-            VideoCodec = "mpeg4",
-            AudioCodec = "aac",
+            VideoCodec = Codecs.LGPL.Video.Mpeg4,
+            AudioCodec = Codecs.LGPL.Audio.Aac,
             VideoBitRate = videoBitRate,
             AudioBitRate = audioBitRate,
         }, progress, ct);
@@ -201,8 +201,8 @@ public static unsafe class MediaOperations
                 InputStream = input,
                 OutputStream = output,
                 OutputFormat = outputFormat,
-                VideoCodec = "mpeg4",
-                AudioCodec = "aac",
+                VideoCodec = Codecs.LGPL.Video.Mpeg4,
+                AudioCodec = Codecs.LGPL.Audio.Aac,
                 VideoBitRate = videoBitRate,
                 AudioBitRate = audioBitRate,
             }, progress, ct);
@@ -235,7 +235,7 @@ public static unsafe class MediaOperations
             InputPath = inputPath,
             OutputPath = outputPath,
             OutputFormat = "mp4",
-            VideoCodec = "mpeg4",
+            VideoCodec = Codecs.LGPL.Video.Mpeg4,
         }, progress, ct);
     }
 
@@ -260,7 +260,7 @@ public static unsafe class MediaOperations
             InputStream = input,
             OutputStream = output,
             OutputFormat = "mp4",
-            VideoCodec = "mpeg4",
+            VideoCodec = Codecs.LGPL.Video.Mpeg4,
         }, progress, ct);
     }
 

@@ -1,3 +1,5 @@
+using Loxifi.FFmpeg.Transcoding.Codecs;
+
 namespace Loxifi.FFmpeg.Transcoding;
 
 public class TranscodeOptions
@@ -12,16 +14,16 @@ public class TranscodeOptions
     public string? OutputFormat { get; init; }
 
     /// <summary>
-    /// Video codec name (e.g., "libx264", "libvpx-vp9").
+    /// Video codec. Use <see cref="LGPL.Video"/> or <see cref="GPL.Video"/> instances.
     /// Null means stream copy (passthrough).
     /// </summary>
-    public string? VideoCodec { get; init; }
+    public VideoCodec? VideoCodec { get; init; }
 
     /// <summary>
-    /// Audio codec name (e.g., "aac", "libopus").
+    /// Audio codec. Use <see cref="LGPL.Audio"/> or <see cref="GPL.Audio"/> instances.
     /// Null means stream copy (passthrough).
     /// </summary>
-    public string? AudioCodec { get; init; }
+    public AudioCodec? AudioCodec { get; init; }
 
     /// <summary>Video bitrate in bits per second. 0 = codec default.</summary>
     public long VideoBitRate { get; init; }
@@ -40,4 +42,7 @@ public class TranscodeOptions
 
     /// <summary>Output audio channel count. 0 = same as input.</summary>
     public int AudioChannels { get; init; }
+
+    internal string? VideoCodecName => VideoCodec?.Name;
+    internal string? AudioCodecName => AudioCodec?.Name;
 }

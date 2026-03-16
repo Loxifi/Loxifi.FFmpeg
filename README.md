@@ -42,7 +42,35 @@ var progress = new Progress<TranscodeProgress>(p =>
 await MediaOperations.ResizeToFileSizeAsync("input.mp4", "output.mp4", targetSize, progress);
 ```
 
-> **Note:** This uses the `mpeg4` encoder (LGPL). If you build FFmpeg with `libx264` (GPL), you can modify the encoder in `MediaOperations.ResizeToFileSize` for better quality.
+> **Note:** `ResizeToFileSize` uses the `mpeg4` encoder (LGPL) by default. For better quality with a GPL build, use the low-level API with `GPL.Video.X264`.
+
+### Codec selection (no magic strings)
+
+All codecs are strongly typed. Use `LGPL.Video.*` / `LGPL.Audio.*` for LGPL builds, or `GPL.Video.*` / `GPL.Audio.*` for GPL builds:
+
+```csharp
+using Loxifi.FFmpeg.Transcoding;
+using Loxifi.FFmpeg.Transcoding.Codecs;
+
+// LGPL build — available codecs are discoverable via intellisense
+using var transcoder = new MediaTranscoder();
+transcoder.Transcode(new TranscodeOptions
+{
+    InputPath = "input.mkv",
+    OutputPath = "output.mp4",
+    VideoCodec = LGPL.Video.SvtAv1,   // AV1 encoder
+    AudioCodec = LGPL.Audio.Opus,     // Opus audio
+});
+
+// GPL build — includes all LGPL codecs plus GPL-only ones
+transcoder.Transcode(new TranscodeOptions
+{
+    InputPath = "input.mkv",
+    OutputPath = "output.mp4",
+    VideoCodec = GPL.Video.X264,      // H.264 (GPL only)
+    AudioCodec = GPL.Audio.Aac,       // AAC
+});
+```
 
 ### Convert GIF to MP4
 

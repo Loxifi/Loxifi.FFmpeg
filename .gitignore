@@ -7,3 +7,4 @@ release/
 *.nupkg
 test-results/
 .env
+publish-local.sh

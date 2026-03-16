@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Loxifi.FFmpeg.Helpers;
+using Loxifi.FFmpeg.Transcoding.Codecs;
 using Loxifi.FFmpeg.Native;
 using Loxifi.FFmpeg.Native.Types;
 
@@ -13,7 +14,7 @@ public static unsafe class MediaOperations
     /// Typical use: combining DASH video-only and audio-only segments.
     /// </summary>
     public static void Mux(string videoPath, string audioPath, string outputPath,
-        string? outputFormat = null, CancellationToken ct = default)
+        ContainerFormat? outputFormat = null, CancellationToken ct = default)
     {
         AVFormatContext* videoCtx = null;
         AVFormatContext* audioCtx = null;
@@ -122,7 +123,7 @@ public static unsafe class MediaOperations
     /// Mux video and audio asynchronously.
     /// </summary>
     public static Task MuxAsync(string videoPath, string audioPath, string outputPath,
-        string? outputFormat = null, CancellationToken ct = default)
+        ContainerFormat? outputFormat = null, CancellationToken ct = default)
     {
         return Task.Run(() => Mux(videoPath, audioPath, outputPath, outputFormat, ct), ct);
     }
@@ -170,7 +171,7 @@ public static unsafe class MediaOperations
     /// Input stream must be seekable (needed to probe duration).
     /// </summary>
     public static void ResizeToFileSize(Stream input, Stream output, long targetSizeBytes,
-        string outputFormat = "mp4",
+        ContainerFormat outputFormat = ContainerFormat.Mp4,
         IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
     {
         if (!input.CanSeek) throw new ArgumentException("Input stream must be seekable to probe duration", nameof(input));
@@ -217,7 +218,7 @@ public static unsafe class MediaOperations
     /// Resize a video stream to fit within the target file size asynchronously.
     /// </summary>
     public static Task ResizeToFileSizeAsync(Stream input, Stream output, long targetSizeBytes,
-        string outputFormat = "mp4",
+        ContainerFormat outputFormat = ContainerFormat.Mp4,
         IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
     {
         return Task.Run(() => ResizeToFileSize(input, output, targetSizeBytes, outputFormat, progress, ct), ct);
@@ -234,7 +235,7 @@ public static unsafe class MediaOperations
         {
             InputPath = inputPath,
             OutputPath = outputPath,
-            OutputFormat = "mp4",
+            OutputFormat = ContainerFormat.Mp4,
             VideoCodec = Codecs.LGPL.Video.Mpeg4,
         }, progress, ct);
     }
@@ -259,7 +260,7 @@ public static unsafe class MediaOperations
         {
             InputStream = input,
             OutputStream = output,
-            OutputFormat = "mp4",
+            OutputFormat = ContainerFormat.Mp4,
             VideoCodec = Codecs.LGPL.Video.Mpeg4,
         }, progress, ct);
     }
@@ -278,7 +279,7 @@ public static unsafe class MediaOperations
     /// Both inputs are copied without re-encoding.
     /// </summary>
     public static void Mux(Stream videoInput, Stream audioInput, Stream output,
-        string outputFormat = "mp4", CancellationToken ct = default)
+        ContainerFormat outputFormat = ContainerFormat.Mp4, CancellationToken ct = default)
     {
         AVFormatContext* videoCtx = null;
         AVFormatContext* audioCtx = null;
@@ -386,7 +387,7 @@ public static unsafe class MediaOperations
     /// Mux video and audio streams asynchronously.
     /// </summary>
     public static Task MuxAsync(Stream videoInput, Stream audioInput, Stream output,
-        string outputFormat = "mp4", CancellationToken ct = default)
+        ContainerFormat outputFormat = ContainerFormat.Mp4, CancellationToken ct = default)
     {
         return Task.Run(() => Mux(videoInput, audioInput, output, outputFormat, ct), ct);
     }
@@ -409,9 +410,9 @@ public static unsafe class MediaOperations
             "Failed to find stream info");
     }
 
-    private static void AllocOutputForStream(string format, AVFormatContext** ctx)
+    private static void AllocOutputForStream(ContainerFormat format, AVFormatContext** ctx)
     {
-        nint fmtPtr = Marshal.StringToHGlobalAnsi(format);
+        nint fmtPtr = Marshal.StringToHGlobalAnsi(format.ToFFmpegName());
         try
         {
             FFmpegException.ThrowIfError(
@@ -443,9 +444,9 @@ public static unsafe class MediaOperations
             "Failed to find stream info");
     }
 
-    private static void AllocOutput(string path, string? format, AVFormatContext** ctx)
+    private static void AllocOutput(string path, ContainerFormat? format, AVFormatContext** ctx)
     {
-        nint fmtPtr = format is not null ? Marshal.StringToHGlobalAnsi(format) : nint.Zero;
+        nint fmtPtr = format is not null ? Marshal.StringToHGlobalAnsi(format.Value.ToFFmpegName()) : nint.Zero;
         nint pathPtr = Marshal.StringToHGlobalAnsi(path);
         try
         {

@@ -8,10 +8,9 @@ public class TranscodeOptions
     public required string OutputPath { get; init; }
 
     /// <summary>
-    /// Output container format (e.g., "mp4", "webm", "mkv").
-    /// If null, inferred from output file extension.
+    /// Output container format. If null, inferred from output file extension.
     /// </summary>
-    public string? OutputFormat { get; init; }
+    public ContainerFormat? OutputFormat { get; init; }
 
     /// <summary>
     /// Video codec. Use <see cref="LGPL.Video"/> or <see cref="GPL.Video"/> instances.
@@ -45,4 +44,5 @@ public class TranscodeOptions
 
     internal string? VideoCodecName => VideoCodec?.Name;
     internal string? AudioCodecName => AudioCodec?.Name;
+    internal string? OutputFormatName => OutputFormat?.ToFFmpegName();
 }

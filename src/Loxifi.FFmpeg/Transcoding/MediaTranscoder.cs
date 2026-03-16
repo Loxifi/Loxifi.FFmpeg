@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Loxifi.FFmpeg.Helpers;
+using Loxifi.FFmpeg.Transcoding.Codecs;
 using Loxifi.FFmpeg.Native;
 using Loxifi.FFmpeg.Native.Types;
 
@@ -139,7 +140,7 @@ public sealed unsafe class MediaTranscoder : IDisposable
         var options = streamOptions.ToFileOptions();
         _outputIO = StreamIOContext.ForWriting(streamOptions.OutputStream);
 
-        nint formatNamePtr = Marshal.StringToHGlobalAnsi(streamOptions.OutputFormat);
+        nint formatNamePtr = Marshal.StringToHGlobalAnsi(streamOptions.OutputFormat.ToFFmpegName());
         try
         {
             fixed (AVFormatContext** pOutputCtx = &_outputCtx)
@@ -166,8 +167,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
     private void SetupOutput(TranscodeOptions options)
     {
-        nint formatNamePtr = options.OutputFormat is not null
-            ? Marshal.StringToHGlobalAnsi(options.OutputFormat)
+        nint formatNamePtr = options.OutputFormatName is not null
+            ? Marshal.StringToHGlobalAnsi(options.OutputFormatName)
             : nint.Zero;
         nint fileNamePtr = Marshal.StringToHGlobalAnsi(options.OutputPath);
 

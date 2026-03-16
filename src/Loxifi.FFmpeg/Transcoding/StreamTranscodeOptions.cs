@@ -8,9 +8,9 @@ public class StreamTranscodeOptions
     public required Stream OutputStream { get; init; }
 
     /// <summary>
-    /// Output container format (e.g., "mp4", "webm", "mkv"). Required for stream output.
+    /// Output container format. Required for stream output.
     /// </summary>
-    public required string OutputFormat { get; init; }
+    public required ContainerFormat OutputFormat { get; init; }
 
     /// <summary>
     /// Video codec. Use <see cref="LGPL.Video"/> or <see cref="GPL.Video"/> instances.

@@ -4,12 +4,16 @@
     <TargetFramework>net8.0</TargetFramework>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <PackageId>Loxifi.FFmpeg.Runtime.android-arm64</PackageId>
-    <Description>FFmpeg native binaries for Android arm64</Description>
+    <Description>FFmpeg 7.1 LGPL native binaries for android-arm64. Install alongside Loxifi.FFmpeg.</Description>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="runtimes\android-arm64\native\**" PackagePath="runtimes\android-arm64\native" CopyToOutputDirectory="PreserveNewest" Link="runtimes\android-arm64\native\%(Filename)%(Extension)" />
-    <Content Include="buildTransitive\**" PackagePath="buildTransitive" />
+    <None Include="..\RUNTIME_README_LGPL.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="buildTransitive\\**" PackagePath="buildTransitive" />
+  </ItemGroup>
 </Project>

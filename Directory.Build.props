@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <Authors>Loxifi</Authors>
+    <Company>Loxifi</Company>
+    <PackageProjectUrl>https://github.com/Loxifi/Loxifi.FFmpeg</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Loxifi/Loxifi.FFmpeg</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>ffmpeg;transcoding;video;audio;mux;p-invoke;cross-platform;android;maui</PackageTags>
+    <Copyright>Copyright (c) Loxifi 2026</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="" Visible="false" />
+  </ItemGroup>
+</Project>

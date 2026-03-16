@@ -4,11 +4,14 @@
     <TargetFramework>net8.0</TargetFramework>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <PackageId>Loxifi.FFmpeg.Runtime.linux-x64</PackageId>
-    <Description>FFmpeg native binaries for Linux x64</Description>
+    <Description>FFmpeg 7.1 LGPL native binaries for linux-x64. Install alongside Loxifi.FFmpeg.</Description>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="runtimes\linux-x64\native\**" PackagePath="runtimes\linux-x64\native" CopyToOutputDirectory="PreserveNewest" Link="runtimes\linux-x64\native\%(Filename)%(Extension)" />
+    <None Include="..\RUNTIME_README_LGPL.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
+
 
 </Project>

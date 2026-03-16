@@ -6,7 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Loxifi.FFmpeg</PackageId>
-    <Description>Cross-platform .NET 8.0 FFmpeg P/Invoke library for media transcoding</Description>
+    <Description>Cross-platform .NET 8.0 FFmpeg P/Invoke library for media transcoding. Mux DASH streams, resize videos for Discord, convert GIFs to MP4 — with file or stream I/O. Supports Windows x64, Linux x64, and Android arm64.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
 
 </Project>

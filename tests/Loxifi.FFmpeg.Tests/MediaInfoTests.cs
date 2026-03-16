@@ -181,6 +181,65 @@ public class TranscodeTests
     }
 }
 
+public class CodecSelectionTests
+{
+    static CodecSelectionTests()
+    {
+        RuntimeHelpers.RunModuleConstructor(typeof(LibraryLoader).Module.ModuleHandle);
+    }
+
+    [Fact]
+    public void BestVideoCodec_UsesX264_WhenGPLAvailable()
+    {
+        // If libx264 is available (GPL build), GifToMp4 should use it
+        nint x264 = AVCodec.avcodec_find_encoder_by_name("libx264");
+        string expectedCodec = x264 != nint.Zero ? "libx264" : "mpeg4";
+
+        string inputPath = Path.Combine(AppContext.BaseDirectory, "Samples", "sample.gif");
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_codec_test_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            MediaOperations.GifToMp4(inputPath, outputPath);
+
+            Assert.True(File.Exists(outputPath));
+            MediaInfo info = MediaInfo.Probe(outputPath);
+            Assert.NotNull(info.VideoStream);
+
+            // On GPL builds, the output should be H.264 (codec_id 27)
+            // On LGPL builds, MPEG-4 (codec_id 12) or SVT-AV1
+            if (x264 != nint.Zero)
+            {
+                Assert.Equal(Native.Types.AVCodecID.AV_CODEC_ID_H264, info.VideoStream!.CodecId);
+            }
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public void BestVideoCodec_FallsBackGracefully()
+    {
+        // Regardless of which codec is used, the operation should succeed
+        string inputPath = Path.Combine(AppContext.BaseDirectory, "Samples", "sample_av.mp4");
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_resize_codec_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            MediaOperations.ResizeToFileSize(inputPath, outputPath, 200_000);
+
+            Assert.True(File.Exists(outputPath));
+            Assert.True(new FileInfo(outputPath).Length > 0);
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+}
+
 public class MediaOperationsTests
 {
     static MediaOperationsTests()

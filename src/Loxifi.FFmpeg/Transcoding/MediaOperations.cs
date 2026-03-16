@@ -6,6 +6,9 @@ using Loxifi.FFmpeg.Native.Types;
 
 namespace Loxifi.FFmpeg.Transcoding;
 
+// Codec preference: best available at runtime
+// GPL users get libx264/aac automatically, LGPL users get mpeg4/aac
+
 public static unsafe class MediaOperations
 {
     /// <summary>
@@ -150,8 +153,8 @@ public static unsafe class MediaOperations
         {
             InputPath = inputPath,
             OutputPath = outputPath,
-            VideoCodec = Codecs.LGPL.Video.Mpeg4,
-            AudioCodec = Codecs.LGPL.Audio.Aac,
+            VideoCodec = BestVideoCodec,
+            AudioCodec = BestAudioCodec,
             VideoBitRate = videoBitRate,
             AudioBitRate = audioBitRate,
         }, progress, ct);
@@ -202,7 +205,7 @@ public static unsafe class MediaOperations
                 InputStream = input,
                 OutputStream = output,
                 OutputFormat = outputFormat,
-                VideoCodec = Codecs.LGPL.Video.Mpeg4,
+                VideoCodec = BestVideoCodec,
                 AudioCodec = Codecs.LGPL.Audio.Aac,
                 VideoBitRate = videoBitRate,
                 AudioBitRate = audioBitRate,
@@ -236,7 +239,7 @@ public static unsafe class MediaOperations
             InputPath = inputPath,
             OutputPath = outputPath,
             OutputFormat = ContainerFormat.Mp4,
-            VideoCodec = Codecs.LGPL.Video.Mpeg4,
+            VideoCodec = BestVideoCodec,
         }, progress, ct);
     }
 
@@ -261,7 +264,7 @@ public static unsafe class MediaOperations
             InputStream = input,
             OutputStream = output,
             OutputFormat = ContainerFormat.Mp4,
-            VideoCodec = Codecs.LGPL.Video.Mpeg4,
+            VideoCodec = BestVideoCodec,
         }, progress, ct);
     }
 
@@ -390,6 +393,30 @@ public static unsafe class MediaOperations
         ContainerFormat outputFormat = ContainerFormat.Mp4, CancellationToken ct = default)
     {
         return Task.Run(() => Mux(videoInput, audioInput, output, outputFormat, ct), ct);
+    }
+
+    // ── Codec selection ──
+
+    private static VideoCodec BestVideoCodec
+    {
+        get
+        {
+            // Prefer libx264 (GPL) > libsvtav1 (LGPL/AV1) > mpeg4 (fallback)
+            if (AVCodec.avcodec_find_encoder_by_name("libx264") != nint.Zero)
+                return GPL.Video.X264;
+            if (AVCodec.avcodec_find_encoder_by_name("libsvtav1") != nint.Zero)
+                return LGPL.Video.SvtAv1;
+            return LGPL.Video.Mpeg4;
+        }
+    }
+
+    private static AudioCodec BestAudioCodec
+    {
+        get
+        {
+            // AAC is universally available and compatible
+            return LGPL.Audio.Aac;
+        }
     }
 
     // ── Helpers ──

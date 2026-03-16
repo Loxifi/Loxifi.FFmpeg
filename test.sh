@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ADB="${ANDROID_SDK_DIR:-/home/service-account/android-sdk}/platform-tools/adb"
 CONFIGURATION="${1:-Release}"
 FAILED=0
+LOCAL_FEED="$SCRIPT_DIR/local-feed"
+PKG_TEST_DIR="$SCRIPT_DIR/tests/Loxifi.FFmpeg.PackageTests"
+TEST_VERSION="0.0.0-test.$(date +%s)"
 
 run_desktop_tests() {
     local license="$1"
@@ -65,16 +68,61 @@ run_android_tests() {
     fi
 }
 
-# Run all 4 test configurations
+run_package_tests() {
+    echo ""
+    echo "=== Package Integration Tests ==="
+    echo "Packing to local feed ($TEST_VERSION)..."
+
+    rm -rf "$LOCAL_FEED"
+    mkdir -p "$LOCAL_FEED"
+
+    # Pack all packages to local feed
+    for proj in \
+        src/Loxifi.FFmpeg/Loxifi.FFmpeg.csproj \
+        src/Loxifi.FFmpeg.Runtime.linux-x64/Loxifi.FFmpeg.Runtime.linux-x64.csproj \
+        src/Loxifi.FFmpeg.Runtime.linux-x64.GPL/Loxifi.FFmpeg.Runtime.linux-x64.GPL.csproj \
+        src/Loxifi.FFmpeg.Runtime.win-x64/Loxifi.FFmpeg.Runtime.win-x64.csproj \
+        src/Loxifi.FFmpeg.Runtime.win-x64.GPL/Loxifi.FFmpeg.Runtime.win-x64.GPL.csproj; do
+        dotnet pack "$SCRIPT_DIR/$proj" -c Release -o "$LOCAL_FEED" \
+            -p:PackageVersion="$TEST_VERSION" --nologo -v q
+    done
+
+    echo "Packed $(ls "$LOCAL_FEED"/*.nupkg | wc -l) packages"
+
+    # Clear NuGet cache for our packages to force fresh restore
+    dotnet nuget locals http-cache --clear > /dev/null 2>&1 || true
+    rm -rf "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
+
+    # Test LGPL on Linux
+    echo ""
+    echo "--- Package Test: Linux LGPL ---"
+    dotnet run --project "$PKG_TEST_DIR" -c Release \
+        -p:FFmpegPackageVersion="$TEST_VERSION" -p:GPLSuffix="" \
+        --nologo 2>&1 || { FAILED=1; echo "PACKAGE TEST Linux LGPL FAILED"; }
+
+    # Test GPL on Linux
+    rm -rf "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
+    echo ""
+    echo "--- Package Test: Linux GPL ---"
+    dotnet run --project "$PKG_TEST_DIR" -c Release \
+        -p:FFmpegPackageVersion="$TEST_VERSION" -p:GPLSuffix=".GPL" \
+        --nologo 2>&1 || { FAILED=1; echo "PACKAGE TEST Linux GPL FAILED"; }
+
+    # Clean up
+    rm -rf "$LOCAL_FEED" "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
+}
+
+# Run all test configurations
 run_desktop_tests "LGPL"
 run_desktop_tests "GPL"
+run_package_tests
 run_android_tests "LGPL"
 run_android_tests "GPL"
 
 echo ""
 if [ $FAILED -eq 0 ]; then
     echo "========================================="
-    echo "  ALL TESTS PASSED (LGPL + GPL, Desktop + Android)"
+    echo "  ALL TESTS PASSED"
     echo "========================================="
 else
     echo "========================================="

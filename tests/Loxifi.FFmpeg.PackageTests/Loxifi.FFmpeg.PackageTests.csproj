@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Version injected by test script -->
+    <FFmpegPackageVersion Condition="'$(FFmpegPackageVersion)' == ''">1.0.6</FFmpegPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Loxifi.FFmpeg" Version="$(FFmpegPackageVersion)" />
+    <!-- License variant injected by test script: LGPL or GPL -->
+    <PackageReference Include="Loxifi.FFmpeg.Runtime.linux-x64$(GPLSuffix)" Version="$(FFmpegPackageVersion)" Condition="$([MSBuild]::IsOSPlatform('Linux'))" />
+    <PackageReference Include="Loxifi.FFmpeg.Runtime.win-x64$(GPLSuffix)" Version="$(FFmpegPackageVersion)" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+  </ItemGroup>
+
+</Project>

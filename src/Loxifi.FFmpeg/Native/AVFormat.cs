@@ -25,6 +25,9 @@ public static unsafe partial class AVFormat
     [LibraryImport(LibName, EntryPoint = "avformat_close_input")]
     public static partial void avformat_close_input(AVFormatContext** s);
 
+    [LibraryImport(LibName, EntryPoint = "avformat_alloc_context")]
+    public static partial AVFormatContext* avformat_alloc_context();
+
     [LibraryImport(LibName, EntryPoint = "avformat_alloc_output_context2")]
     public static partial int avformat_alloc_output_context2(
         AVFormatContext** ctx,
@@ -62,6 +65,19 @@ public static unsafe partial class AVFormat
 
     [LibraryImport(LibName, EntryPoint = "avio_closep")]
     public static partial int avio_closep(AVIOContext** s);
+
+    [LibraryImport(LibName, EntryPoint = "avio_alloc_context")]
+    public static partial AVIOContext* avio_alloc_context(
+        byte* buffer,
+        int buffer_size,
+        int write_flag,
+        nint opaque,
+        nint read_packet,   // int (*)(void*, uint8_t*, int)
+        nint write_packet,  // int (*)(void*, const uint8_t*, int)
+        nint seek);         // int64_t (*)(void*, int64_t, int)
+
+    [LibraryImport(LibName, EntryPoint = "avio_context_free")]
+    public static partial void avio_context_free(AVIOContext** s);
 
     [LibraryImport(LibName, EntryPoint = "av_find_best_stream")]
     public static partial int av_find_best_stream(

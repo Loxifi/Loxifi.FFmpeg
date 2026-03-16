@@ -190,7 +190,156 @@ public static unsafe class MediaOperations
         return Task.Run(() => GifToMp4(inputPath, outputPath, progress, ct), ct);
     }
 
+    /// <summary>
+    /// Mux a video stream and an audio stream into an output stream.
+    /// Both inputs are copied without re-encoding.
+    /// </summary>
+    public static void Mux(Stream videoInput, Stream audioInput, Stream output,
+        string outputFormat = "mp4", CancellationToken ct = default)
+    {
+        AVFormatContext* videoCtx = null;
+        AVFormatContext* audioCtx = null;
+        AVFormatContext* outputCtx = null;
+
+        using var videoIO = StreamIOContext.ForReading(videoInput);
+        using var audioIO = StreamIOContext.ForReading(audioInput);
+        using var outputIO = StreamIOContext.ForWriting(output);
+
+        try
+        {
+            OpenInputStream(videoIO, &videoCtx);
+            OpenInputStream(audioIO, &audioCtx);
+
+            int videoStreamIdx = AVFormat.av_find_best_stream(videoCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, null, 0);
+            if (videoStreamIdx < 0) throw new FFmpegException(videoStreamIdx, "No video stream found");
+
+            int audioStreamIdx = AVFormat.av_find_best_stream(audioCtx, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, null, 0);
+            if (audioStreamIdx < 0) throw new FFmpegException(audioStreamIdx, "No audio stream found");
+
+            AVStream* inVideoStream = videoCtx->Streams[videoStreamIdx];
+            AVStream* inAudioStream = audioCtx->Streams[audioStreamIdx];
+
+            AllocOutputForStream(outputFormat, &outputCtx);
+            outputCtx->Pb = outputIO.Context;
+
+            AVStream* outVideoStream = AVFormat.avformat_new_stream(outputCtx, nint.Zero);
+            if (outVideoStream == null) throw new FFmpegException(-1, "Failed to create video output stream");
+            FFmpegException.ThrowIfError(
+                AVCodec.avcodec_parameters_copy(outVideoStream->Codecpar, inVideoStream->Codecpar),
+                "Failed to copy video parameters");
+            outVideoStream->Codecpar->CodecTag = 0;
+
+            AVStream* outAudioStream = AVFormat.avformat_new_stream(outputCtx, nint.Zero);
+            if (outAudioStream == null) throw new FFmpegException(-1, "Failed to create audio output stream");
+            FFmpegException.ThrowIfError(
+                AVCodec.avcodec_parameters_copy(outAudioStream->Codecpar, inAudioStream->Codecpar),
+                "Failed to copy audio parameters");
+            outAudioStream->Codecpar->CodecTag = 0;
+
+            FFmpegException.ThrowIfError(
+                AVFormat.avformat_write_header(outputCtx, null),
+                "Failed to write header");
+
+            AVPacket* packet = AVCodec.av_packet_alloc();
+            try
+            {
+                while (true)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int ret = AVFormat.av_read_frame(videoCtx, packet);
+                    if (ret == AVErrors.AVERROR_EOF) break;
+                    FFmpegException.ThrowIfError(ret, "Error reading video frame");
+
+                    if (packet->StreamIndex == videoStreamIdx)
+                    {
+                        packet->StreamIndex = 0;
+                        AVCodec.av_packet_rescale_ts(packet, inVideoStream->TimeBase, outVideoStream->TimeBase);
+                        packet->Pos = -1;
+                        AVFormat.av_interleaved_write_frame(outputCtx, packet);
+                    }
+                    AVCodec.av_packet_unref(packet);
+                }
+
+                while (true)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int ret = AVFormat.av_read_frame(audioCtx, packet);
+                    if (ret == AVErrors.AVERROR_EOF) break;
+                    FFmpegException.ThrowIfError(ret, "Error reading audio frame");
+
+                    if (packet->StreamIndex == audioStreamIdx)
+                    {
+                        packet->StreamIndex = 1;
+                        AVCodec.av_packet_rescale_ts(packet, inAudioStream->TimeBase, outAudioStream->TimeBase);
+                        packet->Pos = -1;
+                        AVFormat.av_interleaved_write_frame(outputCtx, packet);
+                    }
+                    AVCodec.av_packet_unref(packet);
+                }
+            }
+            finally
+            {
+                AVCodec.av_packet_free(&packet);
+            }
+
+            FFmpegException.ThrowIfError(
+                AVFormat.av_write_trailer(outputCtx),
+                "Error writing trailer");
+        }
+        finally
+        {
+            CloseInput(&videoCtx);
+            CloseInput(&audioCtx);
+            // Don't avio_closep — the StreamIOContext owns the pb
+            if (outputCtx != null)
+            {
+                outputCtx->Pb = null;
+                AVFormat.avformat_free_context(outputCtx);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Mux video and audio streams asynchronously.
+    /// </summary>
+    public static Task MuxAsync(Stream videoInput, Stream audioInput, Stream output,
+        string outputFormat = "mp4", CancellationToken ct = default)
+    {
+        return Task.Run(() => Mux(videoInput, audioInput, output, outputFormat, ct), ct);
+    }
+
     // ── Helpers ──
+
+    private static void OpenInputStream(StreamIOContext io, AVFormatContext** ctx)
+    {
+        *ctx = AVFormat.avformat_alloc_context();
+        if (*ctx == null) throw new FFmpegException(-1, "Failed to allocate format context");
+
+        (*ctx)->Pb = io.Context;
+
+        FFmpegException.ThrowIfError(
+            AVFormat.avformat_open_input(ctx, null, nint.Zero, null),
+            "Failed to open input stream");
+
+        FFmpegException.ThrowIfError(
+            AVFormat.avformat_find_stream_info(*ctx, null),
+            "Failed to find stream info");
+    }
+
+    private static void AllocOutputForStream(string format, AVFormatContext** ctx)
+    {
+        nint fmtPtr = Marshal.StringToHGlobalAnsi(format);
+        try
+        {
+            FFmpegException.ThrowIfError(
+                AVFormat.avformat_alloc_output_context2(ctx, nint.Zero, (byte*)fmtPtr, null),
+                "Failed to allocate output context");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(fmtPtr);
+        }
+    }
 
     private static void OpenInput(string path, AVFormatContext** ctx)
     {

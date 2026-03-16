@@ -40,6 +40,12 @@ public static unsafe partial class AVUtil
     [LibraryImport(LibName, EntryPoint = "av_channel_layout_copy")]
     public static partial int av_channel_layout_copy(AVChannelLayout* dst, AVChannelLayout* src);
 
+    [LibraryImport(LibName, EntryPoint = "av_malloc")]
+    public static partial nint av_malloc(nuint size);
+
+    [LibraryImport(LibName, EntryPoint = "av_free")]
+    public static partial void av_free(nint ptr);
+
     [LibraryImport(LibName, EntryPoint = "av_dict_set")]
     public static partial int av_dict_set(nint* pm, byte* key, byte* value, int flags);
 

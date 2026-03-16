@@ -240,6 +240,32 @@ public class MediaOperationsTests
     }
 
     [Fact]
+    public void Mux_WithStreams_CombinesVideoAndAudio()
+    {
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_mux_stream_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            using var videoStream = File.OpenRead(SampleAV);
+            using var audioStream = File.OpenRead(SampleAV);
+            using var outputStream = File.Create(outputPath);
+
+            MediaOperations.Mux(videoStream, audioStream, outputStream);
+            outputStream.Flush();
+
+            Assert.True(new FileInfo(outputPath).Length > 0);
+
+            MediaInfo info = MediaInfo.Probe(outputPath);
+            Assert.NotNull(info.VideoStream);
+            Assert.NotNull(info.AudioStream);
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
     public void GifToMp4_Converts()
     {
         string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_gif_{Guid.NewGuid()}.mp4");

@@ -16,6 +16,12 @@ MediaOperations.Mux("video_only.mp4", "audio_only.mp4", "output.mp4");
 
 // Async version
 await MediaOperations.MuxAsync("video_only.mp4", "audio_only.mp4", "output.mp4");
+
+// In-memory using streams (no disk I/O — ideal for DASH on Android/mobile)
+using var videoStream = GetVideoStream();   // any System.IO.Stream
+using var audioStream = GetAudioStream();
+using var output = new MemoryStream();
+MediaOperations.Mux(videoStream, audioStream, output);
 ```
 
 ### Resize video to target file size (Discord upload limit)

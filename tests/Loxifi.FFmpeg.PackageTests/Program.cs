@@ -4,6 +4,26 @@ using Loxifi.FFmpeg.Transcoding;
 
 RuntimeHelpers.RunModuleConstructor(typeof(LibraryLoader).Module.ModuleHandle);
 
+// Diagnostics
+Console.WriteLine($"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
+Console.WriteLine($"RID: {System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}");
+Console.WriteLine($"BaseDir: {AppContext.BaseDirectory}");
+Console.WriteLine($"Assembly: {typeof(LibraryLoader).Assembly.Location}");
+
+// Check if native files exist next to the assembly
+string baseDir = AppContext.BaseDirectory;
+foreach (string f in new[] { "avutil-59.dll", "libavutil.so.59", "avutil.dll", "libavutil.so" })
+{
+    string path = Path.Combine(baseDir, f);
+    Console.WriteLine($"  {f}: {(File.Exists(path) ? "EXISTS" : "missing")}");
+}
+string rtDir = Path.Combine(baseDir, "runtimes");
+if (Directory.Exists(rtDir))
+    Console.WriteLine($"  runtimes/: {string.Join(", ", Directory.GetDirectories(rtDir).Select(Path.GetFileName))}");
+else
+    Console.WriteLine("  runtimes/: missing");
+Console.WriteLine();
+
 int passed = 0;
 int failed = 0;
 

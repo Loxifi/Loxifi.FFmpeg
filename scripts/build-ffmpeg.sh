@@ -374,7 +374,10 @@ build_xvid() {
     # Remove -mno-cygwin (unsupported by modern mingw)
     sed -i 's/-mno-cygwin//g' platform.inc 2>/dev/null || true
     make -j$NPROC && make install
-    rm -f "$PREFIX/lib/libxvidcore.so"* "$PREFIX/lib/libxvidcore.dll"* 2>/dev/null || true
+    # Remove shared/import libs — keep only static archive for linking into FFmpeg
+    rm -f "$PREFIX/lib/libxvidcore.so"* "$PREFIX/lib/xvidcore.dll.a" "$PREFIX/bin/xvidcore.dll" 2>/dev/null || true
+    # Rename xvidcore.a to libxvidcore.a if needed (FFmpeg looks for -lxvidcore)
+    [ -f "$PREFIX/lib/xvidcore.a" ] && [ ! -f "$PREFIX/lib/libxvidcore.a" ] && mv "$PREFIX/lib/xvidcore.a" "$PREFIX/lib/libxvidcore.a"
     cd "$PROJECT_DIR"
 }
 
@@ -465,6 +468,12 @@ copy_output() {
             cp "$bin_dir"/avformat-61.dll "$bin_dir"/avcodec-61.dll "$bin_dir"/avutil-59.dll \
                "$bin_dir"/swscale-8.dll "$bin_dir"/swresample-5.dll "$dst_dir/" 2>/dev/null || \
             cp "$bin_dir"/*.dll "$dst_dir/"
+            # Bundle mingw runtime DLLs (required dependencies)
+            for mingw_dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll; do
+                local dll_path
+                dll_path=$(find /usr/x86_64-w64-mingw32 /usr/lib/gcc/x86_64-w64-mingw32 -name "$mingw_dll" 2>/dev/null | head -1)
+                [ -n "$dll_path" ] && cp "$dll_path" "$dst_dir/"
+            done
             ;;
         android-arm64)
             cp "$src_dir/libavformat.so" "$src_dir/libavcodec.so" "$src_dir/libavutil.so" \

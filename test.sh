@@ -93,6 +93,10 @@ run_package_tests() {
     dotnet nuget locals http-cache --clear > /dev/null 2>&1 || true
     rm -rf "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
 
+    # Convert WSL path to Windows path for cmd.exe tests
+    local WIN_PKG_TEST_DIR
+    WIN_PKG_TEST_DIR=$(wslpath -w "$PKG_TEST_DIR" 2>/dev/null || echo "")
+
     # Test LGPL on Linux
     echo ""
     echo "--- Package Test: Linux LGPL ---"
@@ -107,6 +111,24 @@ run_package_tests() {
     dotnet run --project "$PKG_TEST_DIR" -c Release \
         -p:FFmpegPackageVersion="$TEST_VERSION" -p:GPLSuffix=".GPL" \
         --nologo 2>&1 || { FAILED=1; echo "PACKAGE TEST Linux GPL FAILED"; }
+
+    # Test on Windows via cmd.exe (if available in WSL)
+    if [ -n "$WIN_PKG_TEST_DIR" ] && command -v cmd.exe &>/dev/null; then
+        rm -rf "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
+        echo ""
+        echo "--- Package Test: Windows LGPL ---"
+        cmd.exe /c "dotnet run --project $WIN_PKG_TEST_DIR -c Release -p:FFmpegPackageVersion=$TEST_VERSION --nologo" 2>&1 \
+            || { FAILED=1; echo "PACKAGE TEST Windows LGPL FAILED"; }
+
+        rm -rf "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"
+        echo ""
+        echo "--- Package Test: Windows GPL ---"
+        cmd.exe /c "dotnet run --project $WIN_PKG_TEST_DIR -c Release -p:FFmpegPackageVersion=$TEST_VERSION -p:GPLSuffix=.GPL --nologo" 2>&1 \
+            || { FAILED=1; echo "PACKAGE TEST Windows GPL FAILED"; }
+    else
+        echo ""
+        echo "--- Windows package tests: skipped (not running under WSL) ---"
+    fi
 
     # Clean up
     rm -rf "$LOCAL_FEED" "$PKG_TEST_DIR/bin" "$PKG_TEST_DIR/obj"

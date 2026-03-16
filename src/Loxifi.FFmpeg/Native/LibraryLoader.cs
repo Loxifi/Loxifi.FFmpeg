@@ -173,12 +173,16 @@ public static class LibraryLoader
     private static string[] GetSearchDirs(Assembly assembly)
     {
         string assemblyDir = Path.GetDirectoryName(assembly.Location) ?? string.Empty;
+        string baseDir = AppContext.BaseDirectory;
         string rid = RuntimeInformation.RuntimeIdentifier;
-        string runtimesDir = Path.Combine(assemblyDir, "runtimes", rid, "native");
 
-        return CustomSearchPath is not null
-            ? [CustomSearchPath, runtimesDir, assemblyDir]
-            : [runtimesDir, assemblyDir];
+        var dirs = new List<string>();
+        if (CustomSearchPath is not null) dirs.Add(CustomSearchPath);
+        dirs.Add(Path.Combine(assemblyDir, "runtimes", rid, "native"));
+        dirs.Add(Path.Combine(baseDir, "runtimes", rid, "native"));
+        dirs.Add(assemblyDir);
+        dirs.Add(baseDir);
+        return dirs.Distinct().ToArray();
     }
 
     private static string[] GetPlatformNames(string baseName, int soVersion)

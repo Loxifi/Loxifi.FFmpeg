@@ -166,6 +166,64 @@ public static unsafe class MediaOperations
     }
 
     /// <summary>
+    /// Resize a video stream to fit within the target file size.
+    /// Input stream must be seekable (needed to probe duration).
+    /// </summary>
+    public static void ResizeToFileSize(Stream input, Stream output, long targetSizeBytes,
+        string outputFormat = "mp4",
+        IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
+    {
+        if (!input.CanSeek) throw new ArgumentException("Input stream must be seekable to probe duration", nameof(input));
+
+        // Probe duration by writing to a temp file (MediaInfo.Probe needs a file path)
+        // Actually, we can probe from a stream too — just need to seek back after
+        string tempInput = Path.Combine(Path.GetTempPath(), $"ffmpeg_probe_{Guid.NewGuid()}.tmp");
+        try
+        {
+            // Copy stream to temp file for probing (MediaInfo.Probe needs file path)
+            using (var tempFile = File.Create(tempInput))
+            {
+                input.CopyTo(tempFile);
+            }
+            input.Position = 0;
+
+            MediaInfo info = MediaInfo.Probe(tempInput);
+            double durationSeconds = info.Duration.TotalSeconds;
+            if (durationSeconds <= 0) throw new ArgumentException("Cannot determine input duration");
+
+            long audioBitRate = 128_000;
+            long totalBitRate = (long)(targetSizeBytes * 8 / durationSeconds);
+            long videoBitRate = Math.Max(totalBitRate - audioBitRate, 64_000);
+
+            using var transcoder = new MediaTranscoder();
+            transcoder.Transcode(new StreamTranscodeOptions
+            {
+                InputStream = input,
+                OutputStream = output,
+                OutputFormat = outputFormat,
+                VideoCodec = "mpeg4",
+                AudioCodec = "aac",
+                VideoBitRate = videoBitRate,
+                AudioBitRate = audioBitRate,
+            }, progress, ct);
+        }
+        finally
+        {
+            if (File.Exists(tempInput)) File.Delete(tempInput);
+        }
+    }
+
+    /// <summary>
+    /// Resize a video stream to fit within the target file size asynchronously.
+    /// </summary>
+    public static Task ResizeToFileSizeAsync(Stream input, Stream output, long targetSizeBytes,
+        string outputFormat = "mp4",
+        IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
+    {
+        return Task.Run(() => ResizeToFileSize(input, output, targetSizeBytes, outputFormat, progress, ct), ct);
+    }
+
+    /// <summary>
     /// Convert a GIF to MP4 (H.264 video, no audio).
     /// </summary>
     public static void GifToMp4(string inputPath, string outputPath,
@@ -188,6 +246,31 @@ public static unsafe class MediaOperations
         IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
     {
         return Task.Run(() => GifToMp4(inputPath, outputPath, progress, ct), ct);
+    }
+
+    /// <summary>
+    /// Convert a GIF stream to an MP4 stream.
+    /// </summary>
+    public static void GifToMp4(Stream input, Stream output,
+        IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
+    {
+        using var transcoder = new MediaTranscoder();
+        transcoder.Transcode(new StreamTranscodeOptions
+        {
+            InputStream = input,
+            OutputStream = output,
+            OutputFormat = "mp4",
+            VideoCodec = "mpeg4",
+        }, progress, ct);
+    }
+
+    /// <summary>
+    /// Convert a GIF stream to an MP4 stream asynchronously.
+    /// </summary>
+    public static Task GifToMp4Async(Stream input, Stream output,
+        IProgress<TranscodeProgress>? progress = null, CancellationToken ct = default)
+    {
+        return Task.Run(() => GifToMp4(input, output, progress, ct), ct);
     }
 
     /// <summary>

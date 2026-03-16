@@ -266,6 +266,30 @@ public class MediaOperationsTests
     }
 
     [Fact]
+    public void GifToMp4_WithStreams_Converts()
+    {
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_gif_stream_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            using var input = File.OpenRead(SampleGif);
+            using var output = File.Create(outputPath);
+
+            MediaOperations.GifToMp4(input, output);
+            output.Flush();
+
+            Assert.True(new FileInfo(outputPath).Length > 0);
+
+            MediaInfo info = MediaInfo.Probe(outputPath);
+            Assert.NotNull(info.VideoStream);
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
     public void GifToMp4_Converts()
     {
         string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_gif_{Guid.NewGuid()}.mp4");

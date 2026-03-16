@@ -17,6 +17,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
     private int* _streamMap;     // input stream index -> output stream index (-1 = skip)
     private int _nbInputStreams;
     private bool _disposed;
+    private StreamIOContext? _inputIO;
+    private StreamIOContext? _outputIO;
 
     public void Transcode(
         TranscodeOptions options,
@@ -43,8 +45,55 @@ public sealed unsafe class MediaTranscoder : IDisposable
         return Task.Run(() => Transcode(options, progress, ct), ct);
     }
 
+    public void Transcode(
+        StreamTranscodeOptions options,
+        IProgress<TranscodeProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            OpenInput(options.InputStream);
+            SetupOutput(options);
+            TranscodeLoop(options.ToFileOptions(), progress, ct);
+        }
+        finally
+        {
+            Cleanup();
+        }
+    }
+
+    public Task TranscodeAsync(
+        StreamTranscodeOptions options,
+        IProgress<TranscodeProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        return Task.Run(() => Transcode(options, progress, ct), ct);
+    }
+
     private AVStream** InputStreams => _inputCtx->Streams;
     private AVStream** OutputStreams => (AVStream**)_outputCtx->Streams;
+
+    private void OpenInput(Stream inputStream)
+    {
+        _inputIO = StreamIOContext.ForReading(inputStream);
+
+        _inputCtx = AVFormat.avformat_alloc_context();
+        if (_inputCtx == null) throw new FFmpegException(-1, "Failed to allocate format context");
+        _inputCtx->Pb = _inputIO.Context;
+
+        fixed (AVFormatContext** pInputCtx = &_inputCtx)
+        {
+            FFmpegException.ThrowIfError(
+                AVFormat.avformat_open_input(pInputCtx, null, nint.Zero, null),
+                "Failed to open input stream");
+        }
+
+        FFmpegException.ThrowIfError(
+            AVFormat.avformat_find_stream_info(_inputCtx, null),
+            "Failed to find stream info");
+
+        InitStreamArrays();
+    }
 
     private void OpenInput(string inputPath)
     {
@@ -67,6 +116,11 @@ public sealed unsafe class MediaTranscoder : IDisposable
             AVFormat.avformat_find_stream_info(_inputCtx, null),
             "Failed to find stream info");
 
+        InitStreamArrays();
+    }
+
+    private void InitStreamArrays()
+    {
         _nbInputStreams = (int)_inputCtx->NbStreams;
         _decoderCtxs = (AVCodecContext**)NativeMemory.AllocZeroed((nuint)_nbInputStreams, (nuint)sizeof(nint));
         _encoderCtxs = (AVCodecContext**)NativeMemory.AllocZeroed((nuint)_nbInputStreams, (nuint)sizeof(nint));
@@ -78,6 +132,36 @@ public sealed unsafe class MediaTranscoder : IDisposable
         {
             _streamMap[i] = -1;
         }
+    }
+
+    private void SetupOutput(StreamTranscodeOptions streamOptions)
+    {
+        var options = streamOptions.ToFileOptions();
+        _outputIO = StreamIOContext.ForWriting(streamOptions.OutputStream);
+
+        nint formatNamePtr = Marshal.StringToHGlobalAnsi(streamOptions.OutputFormat);
+        try
+        {
+            fixed (AVFormatContext** pOutputCtx = &_outputCtx)
+            {
+                FFmpegException.ThrowIfError(
+                    AVFormat.avformat_alloc_output_context2(
+                        pOutputCtx, nint.Zero, (byte*)formatNamePtr, null),
+                    "Failed to allocate output context");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(formatNamePtr);
+        }
+
+        _outputCtx->Pb = _outputIO.Context;
+
+        SetupOutputStreams(options);
+
+        FFmpegException.ThrowIfError(
+            AVFormat.avformat_write_header(_outputCtx, null),
+            "Failed to write header");
     }
 
     private void SetupOutput(TranscodeOptions options)
@@ -106,6 +190,32 @@ public sealed unsafe class MediaTranscoder : IDisposable
             Marshal.FreeHGlobal(fileNamePtr);
         }
 
+        SetupOutputStreams(options);
+
+        // Open output file
+        AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
+        if ((oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
+        {
+            nint outputPathPtr = Marshal.StringToHGlobalAnsi(options.OutputPath);
+            try
+            {
+                FFmpegException.ThrowIfError(
+                    AVFormat.avio_open(&_outputCtx->Pb, (byte*)outputPathPtr, (int)AVIOFlags.AVIO_FLAG_WRITE),
+                    "Failed to open output file");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(outputPathPtr);
+            }
+        }
+
+        FFmpegException.ThrowIfError(
+            AVFormat.avformat_write_header(_outputCtx, null),
+            "Failed to write header");
+    }
+
+    private void SetupOutputStreams(TranscodeOptions options)
+    {
         int outputStreamIndex = 0;
 
         for (int i = 0; i < _nbInputStreams; i++)
@@ -134,27 +244,6 @@ public sealed unsafe class MediaTranscoder : IDisposable
                 SetupStreamCopy(inStream, codecpar);
             }
         }
-
-        // Open output file
-        AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
-        if ((oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
-        {
-            nint outputPathPtr = Marshal.StringToHGlobalAnsi(options.OutputPath);
-            try
-            {
-                FFmpegException.ThrowIfError(
-                    AVFormat.avio_open(&_outputCtx->Pb, (byte*)outputPathPtr, (int)AVIOFlags.AVIO_FLAG_WRITE),
-                    "Failed to open output file");
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(outputPathPtr);
-            }
-        }
-
-        FFmpegException.ThrowIfError(
-            AVFormat.avformat_write_header(_outputCtx, null),
-            "Failed to write header");
     }
 
     private void SetupStreamCopy(AVStream* inStream, AVCodecParameters* codecpar)
@@ -526,11 +615,20 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
         if (_outputCtx != null)
         {
-            AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
-            if (oformat != null && (_outputCtx->Pb != null) &&
-                (oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
+            if (_outputIO == null)
             {
-                AVFormat.avio_closep(&_outputCtx->Pb);
+                // File-based output — close the AVIO we opened
+                AVOutputFormat* oformat = (AVOutputFormat*)_outputCtx->Oformat;
+                if (oformat != null && (_outputCtx->Pb != null) &&
+                    (oformat->Flags & (int)AVFormatFlags.AVFMT_NOFILE) == 0)
+                {
+                    AVFormat.avio_closep(&_outputCtx->Pb);
+                }
+            }
+            else
+            {
+                // Stream-based output — StreamIOContext owns the pb
+                _outputCtx->Pb = null;
             }
             AVFormat.avformat_free_context(_outputCtx);
             _outputCtx = null;
@@ -538,11 +636,21 @@ public sealed unsafe class MediaTranscoder : IDisposable
 
         if (_inputCtx != null)
         {
+            if (_inputIO != null)
+            {
+                // Stream-based input — detach pb before close
+                _inputCtx->Pb = null;
+            }
             fixed (AVFormatContext** p = &_inputCtx)
             {
                 AVFormat.avformat_close_input(p);
             }
         }
+
+        _inputIO?.Dispose();
+        _inputIO = null;
+        _outputIO?.Dispose();
+        _outputIO = null;
     }
 
     public void Dispose()

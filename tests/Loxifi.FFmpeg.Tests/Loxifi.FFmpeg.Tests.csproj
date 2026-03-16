@@ -20,8 +20,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Loxifi.FFmpeg\Loxifi.FFmpeg.csproj" />
-    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.linux-x64\Loxifi.FFmpeg.Runtime.linux-x64.csproj" Condition="$([MSBuild]::IsOSPlatform('Linux'))" />
-    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.win-x64\Loxifi.FFmpeg.Runtime.win-x64.csproj" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <!-- LGPL (default) -->
+    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.linux-x64\Loxifi.FFmpeg.Runtime.linux-x64.csproj" Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$(UseGPL)' != 'true'" />
+    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.win-x64\Loxifi.FFmpeg.Runtime.win-x64.csproj" Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(UseGPL)' != 'true'" />
+    <!-- GPL -->
+    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.linux-x64.GPL\Loxifi.FFmpeg.Runtime.linux-x64.GPL.csproj" Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$(UseGPL)' == 'true'" />
+    <ProjectReference Include="..\..\src\Loxifi.FFmpeg.Runtime.win-x64.GPL\Loxifi.FFmpeg.Runtime.win-x64.GPL.csproj" Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(UseGPL)' == 'true'" />
   </ItemGroup>
 
   <ItemGroup>

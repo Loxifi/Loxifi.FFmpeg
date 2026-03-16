@@ -469,6 +469,8 @@ copy_output() {
         android-arm64)
             cp "$src_dir/libavformat.so" "$src_dir/libavcodec.so" "$src_dir/libavutil.so" \
                "$src_dir/libswscale.so" "$src_dir/libswresample.so" "$dst_dir/"
+            # Bundle libc++_shared.so from NDK (required by C++ codec deps like x265, SVT-AV1)
+            cp "$NDK_TOOLCHAIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$dst_dir/" 2>/dev/null || true
             ;;
     esac
     echo "Copied $TARGET ($license) to $dst_dir"

@@ -53,6 +53,14 @@ public sealed unsafe class MediaTranscoder : IDisposable
     /// </summary>
     private int* _streamMap;
 
+    /// <summary>
+    /// Per-stream last encoded frame PTS (in encoder timebase). Used to enforce strictly
+    /// monotonic frame timestamps so the muxer doesn't reject duplicate-DTS packets — this
+    /// happens with variable-delay GIFs whose source PTS collide when rescaled to the
+    /// coarser encoder timebase (1/fps). Entries start at long.MinValue meaning "no frame yet".
+    /// </summary>
+    private long* _lastFramePts;
+
     private int _nbInputStreams;
     private bool _disposed;
 
@@ -211,11 +219,14 @@ public sealed unsafe class MediaTranscoder : IDisposable
         _swsCtxs = (nint*)NativeMemory.AllocZeroed((nuint)_nbInputStreams, (nuint)sizeof(nint));
         _swrCtxs = (nint*)NativeMemory.AllocZeroed((nuint)_nbInputStreams, (nuint)sizeof(nint));
         _streamMap = (int*)NativeMemory.Alloc((nuint)_nbInputStreams, (nuint)sizeof(int));
+        _lastFramePts = (long*)NativeMemory.Alloc((nuint)_nbInputStreams, (nuint)sizeof(long));
 
         // Initialize all stream mappings to -1 (skip) until configured in SetupOutputStreams
+        // and last-frame PTS to long.MinValue (no frame encoded yet)
         for (int i = 0; i < _nbInputStreams; i++)
         {
             _streamMap[i] = -1;
+            _lastFramePts[i] = long.MinValue;
         }
     }
 
@@ -619,6 +630,15 @@ public sealed unsafe class MediaTranscoder : IDisposable
                 frame->Pts = AVUtil.av_rescale_q(frame->Pts, inStream->TimeBase, encCtx->TimeBase);
             }
 
+            // Force strict monotonicity: two source frames can rescale to the same encoder
+            // tick (e.g. variable-delay GIFs at coarse 1/fps timebase), which would later
+            // cause the muxer to reject duplicate-DTS packets with EINVAL.
+            if (frame->Pts <= _lastFramePts[inputIndex] && _lastFramePts[inputIndex] != long.MinValue)
+            {
+                frame->Pts = _lastFramePts[inputIndex] + 1;
+            }
+            _lastFramePts[inputIndex] = frame->Pts;
+
             // Apply video scaling and/or pixel format conversion if a SwsContext was created.
             // sws_scale converts the frame in-place from source format/resolution to target.
             if (_swsCtxs[inputIndex] != nint.Zero)
@@ -775,6 +795,12 @@ public sealed unsafe class MediaTranscoder : IDisposable
         {
             NativeMemory.Free(_streamMap);
             _streamMap = null;
+        }
+
+        if (_lastFramePts != null)
+        {
+            NativeMemory.Free(_lastFramePts);
+            _lastFramePts = null;
         }
 
         // Free output context. Must handle file-based vs stream-based I/O differently:

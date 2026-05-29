@@ -416,6 +416,13 @@ public sealed unsafe class MediaTranscoder : IDisposable
             encCtx->Width = options.Width > 0 ? options.Width : codecpar->Width;
             encCtx->Height = options.Height > 0 ? options.Height : codecpar->Height;
 
+            // YUV420P chroma subsampling requires even dimensions. libx264 (and most
+            // H.264 encoders) refuse to open — failing with "Failed to open encoder" —
+            // when given an odd width or height (e.g. a 680x1327 GIF). Round down to the
+            // nearest even value; the SwsContext created below scales frames to match.
+            encCtx->Width = Math.Max(2, encCtx->Width & ~1);
+            encCtx->Height = Math.Max(2, encCtx->Height & ~1);
+
             // Most encoders (especially libx264) require YUV420P pixel format.
             // If the input is in a different format (e.g., RGB from GIF, NV12 from
             // hardware decode), the SwsContext will handle the conversion.

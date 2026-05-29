@@ -265,6 +265,7 @@ public class MediaOperationsTests
     private static string SampleMp4 => Path.Combine(AppContext.BaseDirectory, "Samples", "sample.mp4");
     private static string SampleAV => Path.Combine(AppContext.BaseDirectory, "Samples", "sample_av.mp4");
     private static string SampleGif => Path.Combine(AppContext.BaseDirectory, "Samples", "sample.gif");
+    private static string OddHeightGif => Path.Combine(AppContext.BaseDirectory, "Samples", "odd_height.gif");
 
     [Fact]
     public void Mux_RedditDASH_HasAudio()
@@ -383,6 +384,34 @@ public class MediaOperationsTests
 
             MediaInfo info = MediaInfo.Probe(outputPath);
             Assert.NotNull(info.VideoStream);
+        }
+        finally
+        {
+            if (File.Exists(outputPath)) File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public void GifToMp4_OddDimensions_Converts()
+    {
+        // Regression: a GIF whose dimensions are not divisible by 2 (here 680x1327).
+        // libx264 with YUV420P chroma subsampling requires even width AND height, so
+        // avcodec_open2 fails with "Failed to open encoder" unless the encoder
+        // dimensions are rounded down to an even number.
+        string outputPath = Path.Combine(Path.GetTempPath(), $"ffmpeg_odd_gif_{Guid.NewGuid()}.mp4");
+
+        try
+        {
+            MediaOperations.GifToMp4(OddHeightGif, outputPath);
+
+            Assert.True(File.Exists(outputPath));
+            Assert.True(new FileInfo(outputPath).Length > 0);
+
+            MediaInfo info = MediaInfo.Probe(outputPath);
+            Assert.NotNull(info.VideoStream);
+            // Encoded dimensions must be even
+            Assert.Equal(0, info.VideoStream!.Width % 2);
+            Assert.Equal(0, info.VideoStream!.Height % 2);
         }
         finally
         {

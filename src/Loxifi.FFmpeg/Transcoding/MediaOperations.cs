@@ -35,6 +35,9 @@ public static unsafe class MediaOperations
         AVFormatContext* audioCtx = null;
         AVFormatContext* outputCtx = null;
 
+        FFmpegLog.EnsureInstalled();
+        FFmpegLog.Reset();
+
         try
         {
             OpenInput(videoPath, &videoCtx);
@@ -327,6 +330,9 @@ public static unsafe class MediaOperations
         AVFormatContext* videoCtx = null;
         AVFormatContext* audioCtx = null;
         AVFormatContext* outputCtx = null;
+
+        FFmpegLog.EnsureInstalled();
+        FFmpegLog.Reset();
 
         using var videoIO = StreamIOContext.ForReading(videoInput);
         using var audioIO = StreamIOContext.ForReading(audioInput);

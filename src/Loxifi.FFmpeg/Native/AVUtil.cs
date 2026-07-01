@@ -29,6 +29,24 @@ public static unsafe partial class AVUtil
     [LibraryImport(LibName, EntryPoint = "av_log_set_level")]
     public static partial void av_log_set_level(int level);
 
+    /// <summary>
+    /// Installs a custom global log callback. The pointer must match the C signature
+    /// <c>void (*)(void* avcl, int level, const char* fmt, va_list vl)</c> using the
+    /// C calling convention. Passing <see cref="nint.Zero"/> restores FFmpeg's default.
+    /// Used by <see cref="Helpers.FFmpegLog"/> to capture codec diagnostics.
+    /// </summary>
+    [LibraryImport(LibName, EntryPoint = "av_log_set_callback")]
+    public static partial void av_log_set_callback(nint callback);
+
+    /// <summary>
+    /// Renders a single log entry — expanding the <c>va_list</c> against <paramref name="fmt"/> —
+    /// into <paramref name="line"/>. Called from a custom log callback to turn FFmpeg's
+    /// printf-style arguments into a finished string without touching the va_list directly.
+    /// </summary>
+    /// <param name="print_prefix">In/out flag controlling whether the line prefix is emitted.</param>
+    [LibraryImport(LibName, EntryPoint = "av_log_format_line2")]
+    public static partial int av_log_format_line2(nint avcl, int level, byte* fmt, nint vl, byte* line, int line_size, int* print_prefix);
+
     /// <summary>Allocates an AVFrame. Must be freed with <see cref="av_frame_free"/>.</summary>
     [LibraryImport(LibName, EntryPoint = "av_frame_alloc")]
     public static partial AVFrame* av_frame_alloc();

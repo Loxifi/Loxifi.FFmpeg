@@ -83,6 +83,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
     {
         try
         {
+            FFmpegLog.EnsureInstalled();
+            FFmpegLog.Reset();
             OpenInput(options.InputPath);
             SetupOutput(options);
             TranscodeLoop(options, progress, ct);
@@ -121,6 +123,8 @@ public sealed unsafe class MediaTranscoder : IDisposable
     {
         try
         {
+            FFmpegLog.EnsureInstalled();
+            FFmpegLog.Reset();
             OpenInput(options.InputStream);
             SetupOutput(options);
             TranscodeLoop(options.ToFileOptions(), progress, ct);

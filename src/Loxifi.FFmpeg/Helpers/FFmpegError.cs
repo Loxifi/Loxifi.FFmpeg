@@ -20,7 +20,7 @@ public partial class FFmpegException : Exception
     /// </summary>
     /// <param name="errorCode">The negative FFmpeg error code.</param>
     public FFmpegException(int errorCode)
-        : base(GetErrorMessage(errorCode))
+        : base(Compose(null, errorCode))
     {
         ErrorCode = errorCode;
     }
@@ -31,9 +31,25 @@ public partial class FFmpegException : Exception
     /// <param name="errorCode">The negative FFmpeg error code.</param>
     /// <param name="context">Description of the operation that failed (e.g., "Failed to open input").</param>
     public FFmpegException(int errorCode, string context)
-        : base($"{context}: {GetErrorMessage(errorCode)}")
+        : base(Compose(context, errorCode))
     {
         ErrorCode = errorCode;
+    }
+
+    /// <summary>
+    /// Builds the exception message: the (optional) context, FFmpeg's error-code string, and —
+    /// when available — the underlying diagnostic captured from FFmpeg's log. The log is what
+    /// turns an opaque code like AVERROR_EXTERNAL ("Generic error in an external library") into
+    /// the codec's actual complaint (e.g. libx264's reason for refusing to open).
+    /// </summary>
+    private static string Compose(string? context, int errorCode)
+    {
+        string baseMsg = context is not null
+            ? $"{context}: {GetErrorMessage(errorCode)}"
+            : GetErrorMessage(errorCode);
+
+        string? log = FFmpegLog.Consume();
+        return log is null ? baseMsg : $"{baseMsg} [ffmpeg: {log}]";
     }
 
     /// <summary>

@@ -72,6 +72,16 @@ public static unsafe partial class AVUtil
     public static partial int av_frame_get_buffer(AVFrame* frame, int align);
 
     /// <summary>
+    /// Ensures the frame's data is writable, copying the buffer only if something else still references
+    /// it. Required before overwriting a frame that has already been sent to an encoder: the encoder may
+    /// still hold it for lookahead or B-frame reordering, and writing into it regardless corrupts frames
+    /// it has not finished with.
+    /// </summary>
+    /// <param name="frame">The frame to make writable.</param>
+    [LibraryImport(LibName, EntryPoint = "av_frame_make_writable")]
+    public static partial int av_frame_make_writable(AVFrame* frame);
+
+    /// <summary>
     /// Converts an FFmpeg error code to a human-readable string.
     /// Used by <see cref="Helpers.FFmpegException"/> for error messages.
     /// </summary>

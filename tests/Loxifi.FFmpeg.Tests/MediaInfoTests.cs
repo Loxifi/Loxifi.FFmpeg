@@ -348,12 +348,15 @@ public class MediaOperationsTests
 
         try
         {
-            using var videoStream = File.OpenRead(SampleAV);
-            using var audioStream = File.OpenRead(SampleAV);
-            using var outputStream = File.Create(outputPath);
-
-            MediaOperations.Mux(videoStream, audioStream, outputStream);
-            outputStream.Flush();
+            // Scoped so the write handle is CLOSED before probing. File.Create opens with FileShare.None,
+            // so on Windows probing the path while this is still open fails with "Permission denied" --
+            // which reads like a broken muxer rather than a still-open handle.
+            using (var videoStream = File.OpenRead(SampleAV))
+            using (var audioStream = File.OpenRead(SampleAV))
+            using (var outputStream = File.Create(outputPath))
+            {
+                MediaOperations.Mux(videoStream, audioStream, outputStream);
+            }
 
             Assert.True(new FileInfo(outputPath).Length > 0);
 
@@ -374,11 +377,12 @@ public class MediaOperationsTests
 
         try
         {
-            using var input = File.OpenRead(SampleGif);
-            using var output = File.Create(outputPath);
-
-            MediaOperations.GifToMp4(input, output);
-            output.Flush();
+            // Scoped so the write handle is CLOSED before probing -- see Mux_WithStreams_CombinesVideoAndAudio.
+            using (var input = File.OpenRead(SampleGif))
+            using (var output = File.Create(outputPath))
+            {
+                MediaOperations.GifToMp4(input, output);
+            }
 
             Assert.True(new FileInfo(outputPath).Length > 0);
 

@@ -19,10 +19,9 @@
 #
 # Differences from publish.sh:
 #   - Skips Linux package-integration and Android on-device tests (Windows host).
-#   - Skips two pre-existing stream-based tests that fail on Windows due to
-#     file-lock semantics in the test code (not the library). Those tests
-#     probe an output path while its FileStream is still held; on Linux this
-#     succeeds (advisory locking), on Windows it returns "Permission denied".
+#   - Runs the FULL suite on both licence variants. The two stream tests that used to be
+#     skipped here held a FileStream open while probing the same path; they are fixed, not
+#     filtered.
 # ============================================================================
 
 [CmdletBinding()]
@@ -69,28 +68,41 @@ $newVersion = "$major.$minor.$patch"
 Write-Host "New version: $newVersion"
 
 # ── Run desktop tests (LGPL + GPL) ─────────────────────────────────────────────
-# Two stream-based tests are filtered out: they reliably fail on Windows
-# due to test-code holding a FileStream open while calling MediaInfo.Probe
-# on the same path. This is a Linux/Windows file-locking divergence in the
-# test setup, not a library bug.
+# The whole suite runs on both licence variants. Two things here are load-bearing:
+#
+#   1. bin/obj are DELETED between variants. UseGPL selects the native runtime through a
+#      ProjectReference condition, and an incremental build does not re-evaluate it — so running the
+#      GPL leg over the LGPL leg's output silently re-tests LGPL. Both legs pass, and libx264 is
+#      never loaded once.
+#   2. LOXIFI_REQUIRE_GPL turns "libx264 is missing, so skip" into a failure on the GPL leg. Without
+#      it a skipped H.264 test is indistinguishable from a passing one, which is what let (1) hide.
 
 Write-Host ''
 Write-Host '========================================'
 Write-Host '  Running desktop tests (LGPL + GPL)'
 Write-Host '========================================'
 
-$testFilter = 'FullyQualifiedName!~Mux_WithStreams_CombinesVideoAndAudio&FullyQualifiedName!~GifToMp4_WithStreams_Converts'
+$testProject = Join-Path $ScriptDir 'tests/Loxifi.FFmpeg.Tests/Loxifi.FFmpeg.Tests.csproj'
+$testDir     = Split-Path $testProject -Parent
 
 foreach ($variant in @(@{License='LGPL'; UseGPL='false'}, @{License='GPL'; UseGPL='true'})) {
     Write-Host ''
     Write-Host "=== Desktop Tests ($($variant.License)) ==="
-    & dotnet test (Join-Path $ScriptDir 'tests/Loxifi.FFmpeg.Tests/Loxifi.FFmpeg.Tests.csproj') `
-        -c Release `
-        -p:UseGPL=$($variant.UseGPL) `
-        --filter $testFilter `
-        --nologo
-    if ($LASTEXITCODE -ne 0) {
-        throw "Desktop $($variant.License) tests FAILED"
+
+    foreach ($stale in @('bin','obj')) {
+        $path = Join-Path $testDir $stale
+        if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+    }
+
+    $env:LOXIFI_REQUIRE_GPL = if ($variant.UseGPL -eq 'true') { '1' } else { '' }
+    try {
+        & dotnet test $testProject -c Release -p:UseGPL=$($variant.UseGPL) --nologo
+        if ($LASTEXITCODE -ne 0) {
+            throw "Desktop $($variant.License) tests FAILED"
+        }
+    }
+    finally {
+        $env:LOXIFI_REQUIRE_GPL = ''
     }
 }
 
